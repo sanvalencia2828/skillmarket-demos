@@ -8,6 +8,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.9"
+      - key: GMGN_MOCK
+        value: "1"
       - key: PUBLIC_DEMO
         value: "0"
       - key: HOST
