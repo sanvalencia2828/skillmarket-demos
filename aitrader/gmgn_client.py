@@ -108,7 +108,10 @@ CACHE_TTL = {
     "kline": 60, "signal": 30,
 }
 
-_429_RE = re.compile(r"429|RATE_LIMIT_(BANNED|EXCEEDED)", re.I)
+_429_RE = re.compile(r"RATE_LIMIT_(BANNED|EXCEEDED)", re.I)
+_429_ERR_RE = re.compile(r"\b429\b")   # '429' solo vale en stderr o texto de error plano,
+                                       # nunca en el payload JSON exitoso (timestamps/cantidades
+                                       # de datos de tokens contienen '429' como substring).
 
 
 class GMGNClient:
@@ -149,7 +152,11 @@ class GMGNClient:
             err = (r.stderr or "").strip()
             blob = f"{err} {out}"
 
-            if _429_RE.search(blob):
+            # 429 real: token RATE_LIMIT_* en cualquier lado, '429' en stderr,
+            # o stdout no-JSON (texto de error plano) que contenga 429.
+            stdout_is_json = out.startswith("{") or out.startswith("[")
+            if _429_RE.search(blob) or _429_ERR_RE.search(err) or \
+               (out and not stdout_is_json and _429_ERR_RE.search(out)):
                 m = re.search(r"resets at ([0-9\-: ]+GMT[^\)]*)", blob)
                 reset = m.group(1) if m else f"~{GMGN_BAN_WAIT:.0f}s"
                 logging.error("429 RATE LIMIT. Sin reintento (extiende el ban). Reset: %s", reset)
