@@ -460,9 +460,18 @@ def _mock_wallet_spec(wallet: str) -> dict:
 
 class MockGMGN(GMGNAdapter):
     """模拟真实 gmgn-cli 1.3.9 的 JSON 结构（trending 行内富字段 + 归一化安全），含若干陷阱。
-    用于无 key 联调与回测；字段名/语义与 LiveGMGN 输出严格同构，适配器可互换。"""
+    用于无 key 联调与回测；字段名/语义与 LiveGMGN 输出严格同构，适配器可互换。
+    支持多链：self.db 按 chain 分桶，market_trending / token_info 按当前链过滤。"""
     def __init__(self):
-        self.db = self._seed()
+        self._all_db = self._seed()
+        self.chain = "sol"   # 默认链，由 adapter_for 切换
+
+    def _set_chain(self, chain: str):
+        self.chain = chain
+
+    @property
+    def db(self):
+        return self._all_db.get(self.chain, self._all_db.get("sol", {}))
 
     def _seed(self):
         # 字段名对齐真实 trending 行：price_change_percent1h 为百分比数值(35.0=+35%)，比率为小数。
@@ -487,36 +496,50 @@ class MockGMGN(GMGNAdapter):
                         dev_ath_mc=dev_ath_mc, dev_del_post=dev_delpost, dev_cto=dev_cto,
                         dev_imgdup=dev_imgdup, dev_inner=dev_inner, dev_surv=dev_surv,
                         dev_badsec=dev_badsec)
-        # Addresses mock con formato base58 realista (44 chars)
-        _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-        def _mock_addr(seed):
-            r = random.Random(seed)
-            return "".join(r.choice(_B58) for _ in range(44))
-        return {
-            _mock_addr(1001):
-                tok("CLEANCAT", 0.0021, 180_000, 950_000, 35.0, bundler=0.04, dev=0.03, top10=0.22, degen=2, renowned=1, age_min=42,
+        # Tokens reales de pump.fun → links GMGN funcionan y muestran datos correctos
+        sol_tokens = {
+            "43uJZGxfZcsiL29k1vpwd7H6up5qgMAoU1aMb5Rmpump":  # BEN
+                tok("BEN", 0.00035, 343000, 1_300_000, -51.3, bundler=0.12, dev=0.00, top10=0.19, degen=60, renowned=12, age_min=42,
                     dev_open=5, dev_ath_mc=8_000_000, dev_inner=5, dev_surv=1.0),
-            _mock_addr(2002):
-                tok("RUGPULL", 0.0009, 60_000, 400_000, 180.0, honeypot=1, mint=0, freeze=0, bundler=0.22, dev=0.18, top10=0.61, degen=1),
-            _mock_addr(3003):
-                tok("BUNDLED", 0.004, 220_000, 700_000, 60.0, bundler=0.41, dev=0.25, top10=0.55, degen=2),
-            _mock_addr(4004):
-                tok("NOAUTH", 0.003, 120_000, 520_000, 22.0, mint=0, bundler=0.08, dev=0.04, top10=0.30, degen=1),
-            _mock_addr(5005):
-                tok("LATEMOON", 0.05, 4_800_000, 1_200_000, 250.0, bundler=0.06, dev=0.04, top10=0.28, degen=2, sniper=3, age_min=900,
-                    dev_open=180, dev_ath_mc=30_000, dev_imgdup=8, dev_inner=2000, dev_surv=0.01, dev_badsec=2),
-            _mock_addr(6006):
-                tok("GOODDOG", 0.0008, 140_000, 880_000, 28.0, bundler=0.05, dev=0.02, top10=0.25, degen=1, renowned=0, age_min=51,
+            "CTPoyCwkjMvoJwU4xvZZqoD8tiYk6yDchySiN5gGpump":  # fone
+                tok("fone", 0.0176, 17_444_000, 306_000, 2.8, bundler=0.53, dev=0.00, top10=0.12, degen=291, renowned=30, age_min=180,
+                    honeypot=0, mint=1),
+            "DjVGs3rLy6GVPD9NxfaDqfSHfwXoxz52xRDgSR6mpump":  # Kidcoin
+                tok("Kidcoin", 0.0000257, 23_800, 305_000, 20.8, bundler=0.21, dev=0.00, top10=0.18, degen=18, renowned=2, age_min=60),
+            "GJ9VcALCxbwGJygZS2xypCtL3ndtPRCUyoD426aepump":  # ELON
+                tok("ELON", 0.000066, 66_100, 212_600, 2051.2, bundler=0.68, dev=0.19, top10=0.18, degen=2, renowned=0, age_min=30,
+                    dev_open=180, dev_ath_mc=30_000, dev_inner=2000, dev_surv=0.01, dev_badsec=2),
+            "3PkXvrHSpbJB4wFryEXG8HrgiKmNJZASiEf28GBrpump":  # MIP
+                tok("MIP", 0.0000168, 16_800, 192_300, 417.3, bundler=0.32, dev=0.00, top10=0.20, degen=9, renowned=1, age_min=51,
                     dev_open=140, dev_ath_mc=50_000, dev_inner=600, dev_surv=0.02, dev_badsec=1),
-            _mock_addr(7007):
-                tok("BASEPEPE", 0.0015, 160_000, 760_000, 31.0, bundler=0.07, dev=0.03, top10=0.30, degen=1, age_min=60,
+            "9cRCn9rGT8V2imeM2BaKs13yhMEais3ruM3rPvTGpump":  # ANSEM
+                tok("ANSEM", 0.243, 242_748_000, 182_900, -3.0, bundler=0.28, dev=0.00, top10=0.66, degen=386, renowned=138, age_min=60,
                     dev_open=12, dev_status="creator_close", dev_bal=0.0, dev_inner=15, dev_surv=0.55),
-            _mock_addr(8008):
-                tok("LONECOIN", 0.0012, 100_000, 300_000, 18.0, bundler=0.06, dev=0.03, top10=0.28, degen=0, renowned=0),
-            _mock_addr(9009):
-                tok('INJECT00000000000000000000000000000000000000', 0.002, 90_000, 200_000, 40.0,
-                    bundler=0.09, dev=0.05, top10=0.33, degen=0),
+            "s3Xi9Z2B5qjnkEPmwxJ451jGpjRpkAyjLzr7hQfpump":  # Kit
+                tok("Kit", 0.0000167, 16_700, 136_800, 442.6, bundler=0.11, dev=0.00, top10=0.17, degen=8, renowned=4, age_min=18),
+            "CBjgL96vvXEAQYgfnND92pA2u3xL3Axd5o1SGwVLpump":  # BLEU
+                tok("BLEU", 0.00000336, 3_358, 135_600, 9.1, bundler=0.00, dev=0.00, top10=0.08, degen=5, renowned=2, age_min=45),
         }
+        # Tokens reales de Robinhood (gmgn.ai/robinhood)
+        rh_tokens = {
+            "0x39dbed3a2bd333467115de45665cc57f813c4571":  # PONS
+                tok("PONS", 0.54141, 541_410_000, 3_141_040, 0.9, bundler=0.080, dev=0.000, top10=0.096, degen=353, renowned=142, age_min=120),
+            "0xc35968c7f5475bb03a43c7382526f4118e01c0de":  # VISTA
+                tok("VISTA", 0.00275234, 2_752_340, 1_104_880, -30.1, bundler=0.026, dev=0.000, top10=0.257, degen=85, renowned=17, age_min=90),
+            "0x15d36b6a28d8327abc7afabf0f106ae2c9af5c4d":  # PARE
+                tok("PARE", 0.00399083, 3_990_830, 968_215, -30.1, bundler=0.002, dev=0.000, top10=0.171, degen=40, renowned=2, age_min=60),
+            "0x020bfc650a365f8bb26819deaabf3e21291018b4":  # CASHCAT
+                tok("CASHCAT", 0.254816, 254_816_000, 899_673, -0.7, bundler=0.063, dev=0.000, top10=0.202, degen=365, renowned=199, age_min=180),
+            "0x2e8c31162b855a2ffa90f6f8634643ad6f111e18":  # AI
+                tok("AI", 0.291467, 288_996_000, 744_591, 1.7, bundler=0.029, dev=0.000, top10=0.166, degen=146, renowned=49, age_min=150),
+            "0xd5f1afea47b1a9eab414d2ee740cf1d6d039e725":  # microduck
+                tok("microduck", 0.0372526, 37_252_600, 599_780, 7.5, bundler=0.032, dev=0.000, top10=0.159, degen=177, renowned=33, age_min=75),
+            "0x07ebb29a38fbcb41563817e5e19f2cec619c90d2":  # BUN
+                tok("BUN", 0.0155209, 15_520_900, 591_413, 16.5, bundler=0.009, dev=0.000, top10=0.741, degen=129, renowned=22, age_min=45),
+            "0xd0782c1358e20ff07a4d3b420221d78f3c160485":  # SQUEEZE
+                tok("SQUEEZE", 0.000138179, 138_179, 439_587, 930.1, bundler=0.000, dev=0.000, top10=0.212, degen=44, renowned=4, age_min=30),
+        }
+        return {"sol": sol_tokens, "robinhood": rh_tokens}
 
     def market_trending(self, cmd=None, **kw):
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
@@ -1485,8 +1508,9 @@ class AppState:
         return self.live
 
     def adapter_for(self, chain: str) -> GMGNAdapter:
-        """取某链的适配器（按链缓存）。无 key → 共用 Mock；有 key → 各链一个 LiveGMGN（同 key 仅 --chain 不同）。"""
+        """取某链的适配器（按链缓存）。无 key → 共用 Mock（按链切换 db）；有 key → 各链一个 LiveGMGN。"""
         if not self.live:
+            self._mock._set_chain(chain)
             return self._mock
         a = self._adapters.get(chain)
         if a is None:
@@ -2255,12 +2279,23 @@ def api_run(r: RunIn):
     ch = valid_chain(r.chain)
     cached = get_cached_screen(ch)
     if cached is None:
-        # Primera corrida: el background screener aun no termina.
-        # Retornar vacio y el frontend seguira polling hasta que haya datos.
-        logging.info("[API_RUN] cache vacio para %s, esperando background screener...", ch)
-        state = _SCREEN_STATE.get(ch, {})
-        return JSONResponse(dict(decisions=[], portfolio=None, positions=[], mode=ST.mode,
-                                 radar_ready=False, radar_error=state.get("error")))
+        # No background screener for this chain (only sol runs in background).
+        # Run screen_radar on-demand so any chain works without restarting.
+        try:
+            result = screen_radar(ch)
+            with _SCREEN_LOCK:
+                _SCREEN_CACHE[ch] = result
+            _save_radar_cache(ch, result)
+            _SCREEN_STATE[ch] = {"ready": True, "error": None,
+                                 "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
+            return JSONResponse(result)
+        except RateLimitError as e:
+            return JSONResponse(dict(decisions=[], portfolio=None, positions=[], mode=ST.mode,
+                                     radar_ready=False, radar_error=f"GMGN rate limit: {e}"))
+        except Exception as e:
+            logging.error("[API_RUN] on-demand screen failed for %s: %s", ch, e, exc_info=True)
+            return JSONResponse(dict(decisions=[], portfolio=None, positions=[], mode=ST.mode,
+                                     radar_ready=False, radar_error=str(e)))
     return JSONResponse(cached)
 
 @app.get("/api/enrich")
