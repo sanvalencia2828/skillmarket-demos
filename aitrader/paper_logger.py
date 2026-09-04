@@ -141,8 +141,13 @@ def log_decision_for_training(features_dict: dict, verdict, token_address: str,
         return None
 
 
-def log_rl_transition(state, action, reward, next_state=None, done=False):
-    """Guarda una transición completa para entrenamiento offline de RL."""
+def log_rl_transition(state, action, reward, next_state=None, done=False,
+                      token_address: str | None = None):
+    """Guarda una transición completa para entrenamiento offline de RL.
+
+    token_address: opcional; q_learning_offline.py lo usa para reconstruir la
+    secuencia temporal POR TOKEN (el state dict de features no contiene address).
+    """
     try:
         record = {
             "kind": "rl_transition",
@@ -151,7 +156,8 @@ def log_rl_transition(state, action, reward, next_state=None, done=False):
             "reward": float(reward),
             "next_state": next_state,
             "done": 1 if done else 0,
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "token_address": token_address
         }
         with _LOCK:
             with JSONL_PATH.open("a", encoding="utf-8") as f:

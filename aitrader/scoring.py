@@ -297,7 +297,8 @@ class ScoringEngine:
                     action=action_taken,
                     reward=reward,
                     next_state=None,  # Se rellenará en el pipeline offline
-                    done=is_done
+                    done=is_done,
+                    token_address=token_addr
                 )
         except Exception as e:
             logging.warning("[RL Integration] Fallo silencioso en RL: %s. Continuando con flujo normal.", e)
