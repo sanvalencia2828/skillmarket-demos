@@ -55,6 +55,9 @@ GAMMA = 0.9
 ITERATIONS = 12          # pasadas de fitted Q-iteration
 HIDDEN = (64, 64)
 SEED = 42
+DOUBLE_DQN = os.environ.get("DQN_DOUBLE", "1").strip().lower() in ("1", "true", "yes", "on")
+# seleccion con la red principal, evaluacion con la target congelada
+# (reduce el sesgo de sobreestimacion del max de Bellman; desactivable con DQN_DOUBLE=0)
 
 
 def build_state_vector(state_dict) -> np.ndarray:
@@ -131,16 +134,36 @@ def build_dataset(episodes: list):
             np.asarray(DONE, dtype=np.float32), skipped)
 
 
-def _q_max(net, states: np.ndarray) -> np.ndarray:
-    """max_a' Q(s', a') para cada estado (replica estados x one-hot de accion)."""
+def _q_all(net, states: np.ndarray) -> np.ndarray:
+    """Q(s', a') para TODAS las acciones de cada estado -> matriz (n_estados, n_acciones)."""
     reps = np.repeat(states, len(ACTIONS), axis=0)
     acts = np.tile(np.eye(len(ACTIONS), dtype=np.float32), (len(states), 1))
     q = net.predict(np.hstack([reps, acts]).astype(np.float32))
-    return q.reshape(len(states), len(ACTIONS)).max(axis=1)
+    return q.reshape(len(states), len(ACTIONS))
+
+
+def _q_max(net, states: np.ndarray) -> np.ndarray:
+    """Vanilla DQN: max_a' Q(s', a') — la MISMA red selecciona y evalúa."""
+    return _q_all(net, states).max(axis=1)
+
+
+def _q_eval(net, states: np.ndarray, action_idx: np.ndarray) -> np.ndarray:
+    """Q(s', a_elegida) — evalúa SOLO la acción indicada (gather del Double DQN)."""
+    acts = np.eye(len(ACTIONS), dtype=np.float32)[action_idx]
+    return net.predict(np.hstack([states, acts]).astype(np.float32))
 
 
 def train_dqn(X, A, R, Xn, DONE):
-    """Fitted Q-iteration: refit de la Q-network contra targets Bellman.
+    """Fitted Q-iteration con Double DQN (offline).
+
+    Equivalente batch del bloque online:
+        best_actions = q_network(next_states).argmax(dim=1)      # seleccionar
+        max_next_q   = target_network(next_states).gather(1, best_actions)  # evaluar
+        target_q     = rewards + gamma * max_next_q * (~dones)
+
+    En batch: select_net = red del fit más reciente; target_net = copia congelada
+    de la generación anterior (retraso de 1 iteracion). it0 sin redes (target=r);
+    it1 vanilla (solo hay una red); it2+ Double DQN.
 
     Q(s,a) se modela como red s|a_onehot -> Q escalar (cabeza compartida).
     Los estados se escalan (StandardScaler) — features como mcap/liquidity
@@ -158,22 +181,35 @@ def train_dqn(X, A, R, Xn, DONE):
     A_onehot = np.eye(len(ACTIONS), dtype=np.float32)[A]
     Xsa = np.hstack([Xs, A_onehot]).astype(np.float32)
 
-    net = None
+    select_net = None        # red principal (la mas reciente que aprende)
+    target_net = None        # target network (congelada, una generacion atras)
     final_loss = float("nan")
     for it in range(ITERATIONS):
-        if net is None:
+        if select_net is None:
             q_next = np.zeros(n, dtype=np.float32)
+        elif target_net is None:
+            # solo existe una red: max clasico (no se puede desacoplar todavia)
+            q_next = _q_max(select_net, Xn_s)
+        elif DOUBLE_DQN:
+            # --- DOUBLE DQN ---
+            # 1. Seleccionar la mejor accion con la Q-Network principal (la que aprende)
+            best_actions = np.argmax(_q_all(select_net, Xn_s), axis=1)
+            # 2. Evaluar el Q-value de ESA accion con la Target Network (estable)
+            q_next = _q_eval(target_net, Xn_s, best_actions)
         else:
-            q_next = _q_max(net, Xn_s)
+            q_next = _q_max(select_net, Xn_s)   # vanilla (flag OFF)
         target = (R + GAMMA * (1.0 - DONE) * has_next * q_next).astype(np.float32)
         net = MLPRegressor(hidden_layer_sizes=HIDDEN, activation="relu",
                            max_iter=400, random_state=SEED,
-                           warm_start=(net is not None))
+                           warm_start=(select_net is not None))
         net.fit(Xsa, target)
+        target_net = select_net                 # la red previa se congela como target
+        select_net = net                        # la nueva es la principal
         pred = net.predict(Xsa)
         final_loss = float(np.mean((pred - target) ** 2))
-        print(f"[DQN] iter {it + 1}/{ITERATIONS} | mse={final_loss:.6f}")
-    return net, scaler, final_loss
+        print(f"[DQN] iter {it + 1}/{ITERATIONS} | mse={final_loss:.6f}"
+              + (" [double]" if (DOUBLE_DQN and target_net is not None) else ""))
+    return select_net, scaler, final_loss
 
 
 def greedy(net, scaler, state_vec: np.ndarray):
@@ -220,8 +256,9 @@ def main() -> int:
         "hidden": list(HIDDEN),
         "n_transitions": int(len(X)),
         "final_loss": loss,
+        "double_dqn": bool(DOUBLE_DQN),
         "trained_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-        "algo": "fitted-q-iteration (offline DQN, MLP 64x64 + StandardScaler)",
+        "algo": "double fitted-q-iteration (offline Double DQN, MLP 64x64 + StandardScaler)",
     }
     with MODEL_PATH.open("wb") as fh:
         pickle.dump(bundle, fh)
