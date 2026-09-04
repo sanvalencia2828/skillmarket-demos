@@ -59,8 +59,11 @@ class ScoringEngine:
         self.thresholds = cfg.get("scoring_thresholds", {})
         # --- SRM capa 3: carga segura del modelo (None => determinista) ---
         self.ml_model = None
+        self.ml_scaler = None                 # StandardScaler (bundles de regresion)
+        self.ml_kind = "none"                 # "classification" | "regression"
         self.ml_feature_names = None
         self.ml_meta: dict = {}
+        self._ml_last = ("ret", 0.0, 0.0)     # auditoria de la ultima inferencia
         self._load_srm_model()
 
     def _load_srm_model(self):
@@ -70,20 +73,34 @@ class ScoringEngine:
             with SRM_MODEL_PATH.open("rb") as fh:
                 bundle = pickle.load(fh)
             mdl = bundle.get("model")
-            if mdl is None or not hasattr(mdl, "predict_proba"):
+            if mdl is None:
+                return
+            # Regresion (predict) es el formato actual; clasificacion
+            # (predict_proba) de bundles previos sigue soportada.
+            if hasattr(mdl, "predict_proba"):
+                self.ml_kind = "classification"
+            elif hasattr(mdl, "predict"):
+                self.ml_kind = "regression"
+            else:
                 return
             names = bundle.get("feature_names")
             if not names and _plog is not None:
                 names = _plog.FEATURE_NAMES
+            scaler = bundle.get("scaler")     # ej. StandardScaler entrenado
             self.ml_model = mdl
+            self.ml_scaler = (scaler if (self.ml_kind == "regression"
+                                         and scaler is not None
+                                         and hasattr(scaler, "transform")) else None)
             self.ml_feature_names = list(names or [])
             self.ml_meta = {k: bundle.get(k) for k in
                             ("bound", "empirical_error", "n_samples", "hierarchy_name", "trained_at")}
-            logging.info("[SRM] modelo ML cargado (%s, n=%s, cota=%.4f)",
-                         self.ml_meta.get("hierarchy_name"), self.ml_meta.get("n_samples"),
-                         self.ml_meta.get("bound") or -1.0)
+            logging.info("[SRM] modelo ML cargado (%s/%s, scaler=%s, n=%s)",
+                         self.ml_meta.get("hierarchy_name"), self.ml_kind,
+                         self.ml_scaler is not None, self.ml_meta.get("n_samples"))
         except Exception as e:                    # noqa: BLE001 - degradacion silenciosa
             self.ml_model = None
+            self.ml_scaler = None
+            self.ml_kind = "none"
             logging.info("[SRM] srm_model.pkl no usable (%s) -> motor determinista", e)
 
     def _token_feature_dict(self, f) -> dict:
@@ -102,17 +119,37 @@ class ScoringEngine:
             "dev_score": (float(f.dev_eval) if f.dev_eval is not None else None),
         }
 
-    def _ml_proba(self, f) -> float | None:
-        """P(y=ENTER | features) del modelo SRM. None si no hay modelo o fallo."""
+    def _ml_predict_return(self, f) -> float | None:
+        """Score 0..1 desde el modelo SRM. None si no hay modelo o fallo.
+
+        - regression (predict + scaler opcional):
+            vec_scaled = scaler.transform([vec])
+            expected_return = model.predict(vec_scaled)[0]   # ej. 0.15 = +15%
+            score = 1 / (1 + exp(-expected_return * 10))     # +10% -> ~0.99995
+        - classification (predict_proba, bundles previos): proba directa.
+        Cualquier fallo => degradacion a determinista (ml_model = None).
+        """
         if self.ml_model is None or _plog is None:
             return None
+        self._ml_last = ("ret", 0.0, 0.0)
         try:
             vec = _plog.vectorize(self._token_feature_dict(f), self.ml_feature_names)
-            proba = float(self.ml_model.predict_proba([vec])[0][1])
-            return proba if math.isfinite(proba) else None
+            if self.ml_kind == "classification":
+                proba = float(self.ml_model.predict_proba([vec])[0][1])
+                self._ml_last = ("proba", proba, proba)
+                return proba if math.isfinite(proba) else None
+            vec_scaled = self.ml_scaler.transform([vec]) if self.ml_scaler is not None else [vec]
+            expected_return = float(self.ml_model.predict(vec_scaled)[0])
+            if not math.isfinite(expected_return):
+                return None
+            z = max(-60.0, min(60.0, expected_return * 10.0))   # exp overflow-safe
+            score = 1.0 / (1.0 + math.exp(-z))
+            self._ml_last = ("ret", expected_return, score)
+            return _clamp(score)
         except Exception as e:                    # noqa: BLE001 - degradacion
             logging.warning("[SRM] inferencia fallo (%s) -> degradando a determinista", e)
-            self.ml_model = None                  # no reintentar en esta instancia
+            self.ml_model = None
+            self.ml_scaler = None
             return None
 
     def score(self, f) -> Verdict:
@@ -150,15 +187,20 @@ class ScoringEngine:
         v.take_profit = self.cfg.get("tp_ladder", [(0.60, 0.40), (1.50, 0.30)])
 
         # --- SRM capa 3: blend ML con degradacion a determinista ---
-        # El score efectivo es predict_proba si hay modelo; si no, composite.
+        # El score efectivo es la salida del modelo (proba o retorno esperado
+        # escalado con sigmoide); si no hay modelo, composite determinista.
         # dimension_scores deterministas se conservan como auditoria.
-        ml_proba = self._ml_proba(f)
+        ml_score = self._ml_predict_return(f)
         effective = composite
-        if ml_proba is not None:
-            effective = ml_proba
-            v.reasons.append(f"SRM ML proba={ml_proba:.3f}")
-            logging.info("[SRM] %s | composite=%.3f -> ml_proba=%.3f",
-                         f.symbol_safe, composite, ml_proba)
+        if ml_score is not None:
+            effective = ml_score
+            kind, raw, sc = self._ml_last
+            if kind == "ret":
+                v.reasons.append(f"SRM ML ret_esp={raw:+.2%} -> score={sc:.3f}")
+            else:
+                v.reasons.append(f"SRM ML proba={raw:.3f}")
+            logging.info("[SRM] %s | composite=%.3f -> ml_score=%.3f",
+                         f.symbol_safe, composite, ml_score)
 
         v.confidence = round(_clamp(effective), 3)
 

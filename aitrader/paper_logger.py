@@ -95,8 +95,12 @@ def _verdict_to_dict(verdict):
     return d
 
 
-def log_decision_for_training(features_dict: dict, verdict, token_address: str) -> dict | None:
+def log_decision_for_training(features_dict: dict, verdict, token_address: str,
+                              chain: str | None = None) -> dict | None:
     """Registra una decision (features + veredicto) para entrenamiento SRM.
+
+    chain: cadena de la decision (sol/robinhood/...) — el future_labeler la
+    necesita para pedir precios de tokens EVM.
 
     Silencioso por contrato: devuelve el registro escrito o None si fallo;
     JAMAS lanza hacia el llamador (el flujo determinista no se ve afectado).
@@ -114,6 +118,7 @@ def log_decision_for_training(features_dict: dict, verdict, token_address: str) 
             "ts": __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
                      .isoformat(timespec="seconds"),
             "address": token_address,
+            "chain": chain,
             "features": {name: features_dict.get(name) for name in FEATURE_NAMES},
             "verdict": {
                 "action": v.get("action"),

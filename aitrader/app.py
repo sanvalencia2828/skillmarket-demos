@@ -1791,7 +1791,7 @@ def enrich_and_score(address: str, chain: str = "sol") -> dict:
     # SRM capa 1: recoleccion silenciosa para entrenamiento offline (aislada)
     try:
         import paper_logger
-        paper_logger.log_decision_for_training({**_feat(f), "rug_ratio": getattr(f, "rug_ratio", 0.0)}, v, f.address)
+        paper_logger.log_decision_for_training({**_feat(f), "rug_ratio": getattr(f, "rug_ratio", 0.0)}, v, f.address, chain)
     except Exception:
         pass
 
@@ -1861,7 +1861,7 @@ def screen_once(chain: str) -> dict:
         # SRM capa 1: recoleccion silenciosa para entrenamiento offline (aislada)
         try:
             import paper_logger
-            paper_logger.log_decision_for_training({**_feat(f), "rug_ratio": getattr(f, "rug_ratio", 0.0)}, v, f.address)
+            paper_logger.log_decision_for_training({**_feat(f), "rug_ratio": getattr(f, "rug_ratio", 0.0)}, v, f.address, chain)
         except Exception:
             pass
 
