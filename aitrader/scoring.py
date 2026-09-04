@@ -7,14 +7,21 @@ accion entrada/TP/SL + razones + risk_flags, todo auditable y reproducible.
 Capa 3 del marco SRM: si existe srm_model.pkl (entrenado offline con
 srm_trainer.py) lo usa via predict_proba; cualquier fallo de carga o
 inferencia degrada a la logica determinista (graceful degradation).
+
+Capa RL: si existe dqn_model.pkl (entrenado offline con train_dqn.py) Y su
+metadata registra >= DQN_GATE_MIN_TRANSITIONS transiciones, el score
+efectivo del DQN (sigmoid de Q(ENTER)-Q(SKIP)) anula el blend anterior.
 Los hard overrides de seguridad (honeypot/rug/safety) NUNCA se omiten.
 """
 
+import json
 import logging
 import math
 import pathlib
 import pickle
 from dataclasses import dataclass, field
+
+import numpy as np
 
 # Capa 1 (paper_logger) provee FEATURE_NAMES/vectorize: unica fuente de verdad
 # del orden de columnas. Si falla el import, el motor sigue determinista.
@@ -24,6 +31,10 @@ except Exception:                                 # noqa: BLE001 - degradacion
     _plog = None
 
 SRM_MODEL_PATH = pathlib.Path(__file__).parent / "srm_model.pkl"
+DQN_MODEL_PATH = pathlib.Path(__file__).parent / "dqn_model.pkl"
+DQN_META_PATH = pathlib.Path(__file__).parent / "dqn_meta.json"
+DQN_GATE_MIN_TRANSITIONS = 500   # gate: sin datos suficientes, el DQN no se consume
+ACTIONS_DQN = {0: "ENTER", 1: "EXIT", 2: "HOLD", 3: "SKIP"}   # orden de ACTION_MAP (train_dqn)
 
 
 @dataclass
@@ -65,6 +76,70 @@ class ScoringEngine:
         self.ml_meta: dict = {}
         self._ml_last = ("ret", 0.0, 0.0)     # auditoria de la ultima inferencia
         self._load_srm_model()
+        # --- RL capa: DQN con gate >= 500 transiciones (None => no se consume) ---
+        self.dqn = None
+        self.dqn_meta: dict = {}
+        self._dqn_last: dict = {}
+        self._load_dqn_model()
+
+    def _load_dqn_model(self):
+        """Carga el DQN entrenado offline SOLO si el gate pasa (>= 500 transiciones).
+
+        Lectura barata de dqn_meta.json (json, sin unpicklear sklearn) para el
+        gate; solo si pasa se carga el modelo. Cualquier fallo -> None."""
+        try:
+            if not DQN_META_PATH.exists() or not DQN_MODEL_PATH.exists():
+                return
+            meta = json.loads(DQN_META_PATH.read_text(encoding="utf-8"))
+            n_tr = int(meta.get("n_transitions") or 0)
+            if n_tr < DQN_GATE_MIN_TRANSITIONS:
+                logging.info("[DQN] gate: %s transiciones < %s -> sin consumo en vivo (determinista)",
+                             n_tr, DQN_GATE_MIN_TRANSITIONS)
+                return
+            names = meta.get("feature_names") or []
+            if _plog is not None and list(names) != list(_plog.FEATURE_NAMES):
+                logging.warning("[DQN] feature_names del bundle no coincide con FEATURE_NAMES -> ignorado")
+                return
+            with DQN_MODEL_PATH.open("rb") as fh:
+                bundle = pickle.load(fh)
+            mdl = bundle.get("model")
+            amap = bundle.get("action_map") or {}
+            if mdl is None or not hasattr(mdl, "predict") or not amap:
+                return
+            self.dqn = mdl
+            self.dqn_meta = {"n_transitions": n_tr, "trained_at": meta.get("trained_at"),
+                             "gamma": meta.get("gamma"), "action_map": amap,
+                             "final_loss": bundle.get("final_loss")}
+            logging.info("[DQN] modelo activo (n=%s, mse=%.6f)", n_tr, self.dqn_meta.get("final_loss") or -1.0)
+        except Exception as e:                    # noqa: BLE001 - degradacion
+            self.dqn = None
+            logging.info("[DQN] dqn_model.pkl no usable (%s) -> determinista", e)
+
+    def _dqn_score(self, f) -> float | None:
+        """Score 0..1 desde el DQN (gate activo). None si inactivo o fallo.
+
+        senal = sigmoid((Q(ENTER) - Q(SKIP)) * 10): favorece ENTER sobre SKIP;
+        si el greedy es EXIT/HOLD la diferencia tiende a bajar el score.
+        Cualquier fallo -> degradacion a determinista (ml/dqn = None)."""
+        if self.dqn is None or _plog is None:
+            return None
+        try:
+            vec = _plog.vectorize(self._token_feature_dict(f))
+            v = np.asarray(vec, dtype=np.float32).reshape(1, -1)
+            n_act = len(self.dqn_meta.get("action_map") or {}) or 4
+            reps = np.repeat(v, n_act, axis=0)
+            onehot = np.eye(n_act, dtype=np.float32)
+            q = np.asarray(self.dqn.predict(np.hstack([reps, onehot]))).reshape(n_act)
+            q_enter = float(q[0])                  # ENTER = 0 en ACTION_MAP
+            q_skip = float(q[3])                   # SKIP = 3 en ACTION_MAP
+            z = max(-60.0, min(60.0, (q_enter - q_skip) * 10.0))
+            self._dqn_last = {"q": [round(float(x), 4) for x in q.tolist()],
+                              "greedy": int(np.argmax(q))}
+            return _clamp(1.0 / (1.0 + math.exp(-z)))
+        except Exception as e:                    # noqa: BLE001 - degradacion
+            logging.warning("[DQN] inferencia fallo (%s) -> degradando a determinista", e)
+            self.dqn = None
+            return None
 
     def _load_srm_model(self):
         try:
@@ -201,6 +276,15 @@ class ScoringEngine:
                 v.reasons.append(f"SRM ML proba={raw:.3f}")
             logging.info("[SRM] %s | composite=%.3f -> ml_score=%.3f",
                          f.symbol_safe, composite, ml_score)
+
+        # --- RL capa: DQN con gate (si esta activo, su score manda sobre el blend) ---
+        dqn_score = self._dqn_score(f)
+        if dqn_score is not None:
+            effective = dqn_score
+            last = self._dqn_last or {}
+            v.reasons.append(f"DQN score={dqn_score:.3f} greedy={ACTIONS_DQN.get(last.get('greedy'), '?')}")
+            logging.info("[DQN] %s | composite=%.3f -> dqn_score=%.3f",
+                         f.symbol_safe, composite, dqn_score)
 
         v.confidence = round(_clamp(effective), 3)
 

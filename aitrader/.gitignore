@@ -16,6 +16,11 @@ outputs/*.json
 !outputs/.gitkeep
 bot_state.json
 
+# Modelos entrenados offline (regenerables con srm_trainer/train_dqn/q_learning_offline)
+q_table.pkl
+dqn_model.pkl
+dqn_meta.json
+
 # Secrets
 .env
 config/gmgn/
