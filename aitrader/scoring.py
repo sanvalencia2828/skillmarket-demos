@@ -236,6 +236,73 @@ class ScoringEngine:
             v.action = "SKIP"
             v.reasons.insert(0, "seguridad inaceptable")
 
+        # --- Inicio bloque RL (Shadow Mode / Aislado) ---
+        try:
+            from reward_engine import compute_step_reward
+            import position_manager as pos_mgr
+
+            # f es TokenFeatures (dataclass), no dict -> getattr
+            token_addr = getattr(f, "address", None)
+            current_price = getattr(f, "price", 0.0) or 0.0
+
+            open_pos = pos_mgr.get_position(token_addr)
+
+            entry_price = open_pos["entry_price"] if open_pos else None
+            prev_price = open_pos["last_price"] if open_pos else None
+            tp_price = open_pos["tp"] if open_pos else None
+            sl_price = open_pos["sl"] if open_pos else None
+            hold_steps = open_pos["hold_steps"] if open_pos else 0
+
+            action_taken = v.action
+            is_done = (action_taken == "EXIT")
+
+            # 1. Si el SRM dice ENTER y no hay posición abierta, la abrimos en Paper Trading
+            if action_taken == "ENTER" and open_pos is None:
+                # tp/sl del veredicto son porcentajes (ladder/hard_stop) ->
+                # convertir a precios absolutos para que reward_engine compare
+                # current_price >= tp_price correctamente
+                tp_price_new = None
+                try:
+                    if v.take_profit:
+                        tp_price_new = current_price * (1.0 + float(v.take_profit[0][0]))
+                except Exception:
+                    tp_price_new = None
+                sl_price_new = current_price * (1.0 + float(v.stop_loss or -0.35))
+                pos_mgr.open_position(token_addr, current_price, tp_price_new, sl_price_new)
+
+            # 2. Calcular recompensa del paso actual
+            reward = compute_step_reward(
+                current_price=current_price,
+                previous_price=prev_price,
+                entry_price=entry_price,
+                action=action_taken,
+                is_done=is_done,
+                tp_price=tp_price,
+                sl_price=sl_price,
+                hold_steps=hold_steps
+            )
+
+            # 3. Actualizar estado de la posición
+            if open_pos and action_taken != "EXIT":
+                pos_mgr.update_position_price(token_addr, current_price)
+            elif is_done:
+                pos_mgr.close_position(token_addr)
+
+            # 4. Guardar transición RL para entrenamiento futuro (DQN)
+            #    state: el dict de features (espacio de estado del SRM, JSON-safe);
+            #    el dataclass f no es serializable.
+            if _plog is not None:
+                _plog.log_rl_transition(
+                    state=self._token_feature_dict(f),
+                    action=action_taken,
+                    reward=reward,
+                    next_state=None,  # Se rellenará en el pipeline offline
+                    done=is_done
+                )
+        except Exception as e:
+            logging.warning("[RL Integration] Fallo silencioso en RL: %s. Continuando con flujo normal.", e)
+        # --- Fin bloque RL ---
+
         return v
 
     # ---------------------------------------------------- dimensiones

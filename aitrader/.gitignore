@@ -14,6 +14,7 @@ outputs/*.jsonl
 outputs/*.log
 outputs/*.json
 !outputs/.gitkeep
+bot_state.json
 
 # Secrets
 .env
