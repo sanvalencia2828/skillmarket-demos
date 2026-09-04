@@ -2103,6 +2103,75 @@ def do_buy(chain: str, address: str, size_sol: float) -> dict:
     log("BUY", symbol, f"{ST.mode} {_verb} {size_sol} ({chain})", dict(size_sol=size_sol, chain=chain, **exit_plan()))
     return dict(ok=True, status=status_msg, filled=filled, symbol=symbol)
 
+def _rl_terminal_bridge(token_address: str, current_market_price: float, token_features_dict=None):
+    """RL Terminal Bridge (Paso 4): recompensa terminal + transición EXIT + cierre en
+    PositionManager. Se llama justo ANTES de eliminar la posición de memoria.
+    Aislado: si RL falla, la posición se limpia igualmente (el bot sigue vivo)."""
+    if not token_address:
+        return
+    try:
+        from reward_engine import compute_step_reward
+        import position_manager as pos_mgr
+        import paper_logger as _plog
+
+        # 1. Obtener el estado actual de la posición desde PositionManager
+        open_pos = pos_mgr.get_position(token_address)
+        if open_pos and current_market_price and current_market_price > 0:
+            # 2. Calcular la recompensa terminal
+            # action="EXIT", is_done=True.
+            # previous_price es el último precio guardado, current_price es el precio actual del mercado
+            terminal_reward = compute_step_reward(
+                current_price=current_market_price,
+                previous_price=open_pos.get("last_price"),
+                entry_price=open_pos.get("entry_price"),
+                action="EXIT",
+                is_done=True,
+                tp_price=open_pos.get("tp"),
+                sl_price=open_pos.get("sl"),
+                hold_steps=open_pos.get("hold_steps", 0)
+            )
+
+            # 3. Construir el estado final (features actuales del mercado)
+            final_state_features = token_features_dict if token_features_dict else {"price": current_market_price}
+
+            # 4. Guardar la transición terminal
+            if _plog is not None:
+                _plog.log_rl_transition(
+                    state=final_state_features,
+                    action="EXIT",
+                    reward=terminal_reward,
+                    next_state=None,  # Es terminal, no hay next_state
+                    done=True
+                )
+
+        # 5. Cerrar la posición en el PositionManager (limpiar el estado)
+        pos_mgr.close_position(token_address)
+
+    except Exception as e:
+        logging.warning("[RL Terminal Bridge] Fallo silencioso: %s", e)
+        # Aseguramos que la posición se cierre en el manager aunque RL falle
+        try:
+            import position_manager as pos_mgr
+            pos_mgr.close_position(token_address)
+        except Exception:
+            pass
+
+
+def _rl_exit_price(p: dict) -> float:
+    """Precio de mercado actual de una posición para el puente RL:
+    cur_price del último ciclo de monitor; fallback entry_price * (1 + pnl)."""
+    try:
+        cur = p.get("cur_price") or 0.0
+        if cur and cur > 0:
+            return float(cur)
+        ep = p.get("entry_price") or 0.0
+        if ep > 0:
+            return float(ep) * (1.0 + (p.get("pnl") or 0.0))
+    except Exception:
+        pass
+    return 0.0
+
+
 def do_sell(address: str) -> dict:
     idx = next((i for i, p in enumerate(ST.positions) if p["address"] == address), None)
     if idx is None:
@@ -2125,6 +2194,11 @@ def do_sell(address: str) -> dict:
     else:
         ST.risk.consec_losses = 0
     log("SELL", p["symbol"], f"{ST.mode} 平仓 PnL {pnl:+.1%}")
+    # RL Terminal Bridge (Paso 4): recompensa terminal al cerrar, antes de quitar de memoria
+    try:
+        _rl_terminal_bridge(address, _rl_exit_price(p))
+    except Exception:
+        pass
     ST.positions.pop(idx)
     save_positions()
     return dict(ok=True, symbol=p["symbol"])
@@ -2136,6 +2210,11 @@ def do_unmonitor(address: str) -> dict:
         raise HTTPException(404, "未找到该持仓")
     sym = ST.positions[idx]["symbol"]
     log("UNMONITOR", sym, "取消监控（未卖出）")
+    # RL Terminal Bridge (Paso 4): el ciclo RL del agente termina al dejar de monitorear
+    try:
+        _rl_terminal_bridge(address, _rl_exit_price(ST.positions[idx]))
+    except Exception:
+        pass
     ST.positions.pop(idx)
     save_positions()
     return dict(ok=True, symbol=sym)
