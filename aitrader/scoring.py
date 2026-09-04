@@ -3,11 +3,27 @@
 Reemplaza LLMJudge con reglas explicitas y pesos configurables.
 Entra TokenFeatures (con senales on-chain enriquecidas) y sale Verdict:
 accion entrada/TP/SL + razones + risk_flags, todo auditable y reproducible.
+
+Capa 3 del marco SRM: si existe srm_model.pkl (entrenado offline con
+srm_trainer.py) lo usa via predict_proba; cualquier fallo de carga o
+inferencia degrada a la logica determinista (graceful degradation).
+Los hard overrides de seguridad (honeypot/rug/safety) NUNCA se omiten.
 """
 
 import logging
 import math
+import pathlib
+import pickle
 from dataclasses import dataclass, field
+
+# Capa 1 (paper_logger) provee FEATURE_NAMES/vectorize: unica fuente de verdad
+# del orden de columnas. Si falla el import, el motor sigue determinista.
+try:
+    import paper_logger as _plog
+except Exception:                                 # noqa: BLE001 - degradacion
+    _plog = None
+
+SRM_MODEL_PATH = pathlib.Path(__file__).parent / "srm_model.pkl"
 
 
 @dataclass
@@ -41,6 +57,63 @@ class ScoringEngine:
         self.cfg = cfg
         self.w = cfg.get("scoring_weights", {})
         self.thresholds = cfg.get("scoring_thresholds", {})
+        # --- SRM capa 3: carga segura del modelo (None => determinista) ---
+        self.ml_model = None
+        self.ml_feature_names = None
+        self.ml_meta: dict = {}
+        self._load_srm_model()
+
+    def _load_srm_model(self):
+        try:
+            if not SRM_MODEL_PATH.exists():
+                return
+            with SRM_MODEL_PATH.open("rb") as fh:
+                bundle = pickle.load(fh)
+            mdl = bundle.get("model")
+            if mdl is None or not hasattr(mdl, "predict_proba"):
+                return
+            names = bundle.get("feature_names")
+            if not names and _plog is not None:
+                names = _plog.FEATURE_NAMES
+            self.ml_model = mdl
+            self.ml_feature_names = list(names or [])
+            self.ml_meta = {k: bundle.get(k) for k in
+                            ("bound", "empirical_error", "n_samples", "hierarchy_name", "trained_at")}
+            logging.info("[SRM] modelo ML cargado (%s, n=%s, cota=%.4f)",
+                         self.ml_meta.get("hierarchy_name"), self.ml_meta.get("n_samples"),
+                         self.ml_meta.get("bound") or -1.0)
+        except Exception as e:                    # noqa: BLE001 - degradacion silenciosa
+            self.ml_model = None
+            logging.info("[SRM] srm_model.pkl no usable (%s) -> motor determinista", e)
+
+    def _token_feature_dict(self, f) -> dict:
+        """TokenFeatures -> dict con las mismas claves que el training set
+        (app._feat + rug_ratio). Orden fijo garantizado por vectorize()."""
+        return {
+            "volatility": f.volatility, "smart_money_netflow": f.smart_money_netflow,
+            "holder_pnl_ratio": f.holder_pnl_ratio, "trader_buy_ratio": f.trader_buy_ratio,
+            "chg_1h": f.chg_1h, "chg_5m": f.chg_5m, "buy_ratio": f.buy_ratio,
+            "turnover": f.turnover, "liquidity": f.liquidity, "mcap": f.mcap,
+            "age_min": f.age_min, "bundler": f.bundler, "dev_hold": f.dev_hold,
+            "top10": f.top10, "buy_tax": f.buy_tax, "sell_tax": f.sell_tax,
+            "rug_ratio": f.rug_ratio, "smart_degen": f.smart_degen,
+            "renowned": f.renowned, "sm_confluence": f.sm_confluence,
+            "sniper_count": f.sniper_count,
+            "dev_score": (float(f.dev_eval) if f.dev_eval is not None else None),
+        }
+
+    def _ml_proba(self, f) -> float | None:
+        """P(y=ENTER | features) del modelo SRM. None si no hay modelo o fallo."""
+        if self.ml_model is None or _plog is None:
+            return None
+        try:
+            vec = _plog.vectorize(self._token_feature_dict(f), self.ml_feature_names)
+            proba = float(self.ml_model.predict_proba([vec])[0][1])
+            return proba if math.isfinite(proba) else None
+        except Exception as e:                    # noqa: BLE001 - degradacion
+            logging.warning("[SRM] inferencia fallo (%s) -> degradando a determinista", e)
+            self.ml_model = None                  # no reintentar en esta instancia
+            return None
 
     def score(self, f) -> Verdict:
         v = Verdict(entry_price=f.price)
@@ -71,24 +144,36 @@ class ScoringEngine:
             safety=round(dim_safety, 3),
             dev=round(dim_dev, 3),
         )
-        v.confidence = round(_clamp(composite), 3)
         v.risk_flags = flags
         v.reasons = reasons
         v.stop_loss = -self.cfg.get("hard_stop_pct", 0.35)
         v.take_profit = self.cfg.get("tp_ladder", [(0.60, 0.40), (1.50, 0.30)])
+
+        # --- SRM capa 3: blend ML con degradacion a determinista ---
+        # El score efectivo es predict_proba si hay modelo; si no, composite.
+        # dimension_scores deterministas se conservan como auditoria.
+        ml_proba = self._ml_proba(f)
+        effective = composite
+        if ml_proba is not None:
+            effective = ml_proba
+            v.reasons.append(f"SRM ML proba={ml_proba:.3f}")
+            logging.info("[SRM] %s | composite=%.3f -> ml_proba=%.3f",
+                         f.symbol_safe, composite, ml_proba)
+
+        v.confidence = round(_clamp(effective), 3)
 
         # --- Logging de dimensiones (auditoria en terminal) ---
         logging.info(
             "[SCORING] %s | dim: momentum=%.3f smart_money=%.3f liquidity=%.3f safety=%.3f dev=%.3f | composite=%.3f",
             f.symbol_safe, dim_momentum, dim_smart, dim_liquidity, dim_safety, dim_dev, composite)
 
-        # --- Decision ---
+        # --- Decision (mismo umbral; dim_safety sigue siendo obligatoria) ---
         enter_th = self.thresholds.get("enter", 0.75)
         watch_th = self.thresholds.get("watch", 0.40)
 
-        if composite >= enter_th and dim_safety >= 0.3:
+        if effective >= enter_th and dim_safety >= 0.3:
             v.action = "ENTER"
-        elif composite >= watch_th:
+        elif effective >= watch_th:
             v.action = "WATCH"
         else:
             v.action = "SKIP"

@@ -1788,6 +1788,13 @@ def enrich_and_score(address: str, chain: str = "sol") -> dict:
     engine = ScoringEngine(CFG)
     v = engine.score(f)
 
+    # SRM capa 1: recoleccion silenciosa para entrenamiento offline (aislada)
+    try:
+        import paper_logger
+        paper_logger.log_decision_for_training({**_feat(f), "rug_ratio": getattr(f, "rug_ratio", 0.0)}, v, f.address)
+    except Exception:
+        pass
+
     if v.action == "ENTER":
         log_paper_trade(f.symbol_safe, f.address, v, f.price)
 
@@ -1850,6 +1857,14 @@ def screen_once(chain: str) -> dict:
     for sc, f in to_score:
         enrich_with_onchain_signals(g, f)
         v = engine.score(f)
+
+        # SRM capa 1: recoleccion silenciosa para entrenamiento offline (aislada)
+        try:
+            import paper_logger
+            paper_logger.log_decision_for_training({**_feat(f), "rug_ratio": getattr(f, "rug_ratio", 0.0)}, v, f.address)
+        except Exception:
+            pass
+
         if v.action == "SKIP":
             decisions.append(_reject(f, f"REJECT scoring: {'; '.join(v.reasons[:2])}", 4, v))
             continue
