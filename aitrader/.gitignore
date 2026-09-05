@@ -41,3 +41,7 @@ Thumbs.db
 *.tmp
 *.bak
 ~$*
+
+# Server runtime logs
+server_out.log
+server_err.log
