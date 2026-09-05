@@ -15,6 +15,12 @@ from pathlib import Path
 
 import numpy as np
 
+# Alerta sonora del gate (solo Windows tiene winsound; otros: BEL '\a')
+if sys.platform == 'win32':
+    import winsound
+else:
+    winsound = None
+
 # Windows: consola cp1252 crashea con emojis/box-drawing sin esto
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -25,6 +31,11 @@ JSONL_PATH = ROOT / "outputs" / "paper_trades.jsonl"
 MODEL_PATH = ROOT / "dqn_model.pkl"
 META_PATH = ROOT / "dqn_meta.json"
 GATE_THRESHOLD = 500
+
+# --- Alerta sonora del gate ---
+GATE_BEEP_FREQ = 1000     # Hz
+GATE_BEEP_MS = 400        # ms por beep
+GATE_BEEP_REPEATS = 3     # beeps por alerta
 
 # --- Colores ANSI para la terminal ---
 class Colors:
@@ -237,8 +248,24 @@ def display_dashboard(data, model_info, reward_stats):
     print(f"{Colors.CYAN}─────────────────────────────────────────────────────────────{Colors.END}")
     print(f"{Colors.YELLOW}Presiona Ctrl+C para salir.  --watch para refresco automático.{Colors.END}")
 
+def gate_beep():
+    """Emite el aviso sonoro de gate abierto (Windows: winsound; otros: BEL)."""
+    try:
+        if winsound is not None:
+            for _ in range(GATE_BEEP_REPEATS):
+                winsound.Beep(GATE_BEEP_FREQ, GATE_BEEP_MS)
+                time.sleep(0.15)
+        else:
+            for _ in range(GATE_BEEP_REPEATS):
+                print('\a', end='', flush=True)
+                time.sleep(0.3)
+    except Exception:
+        pass  # la alerta sonora nunca debe romper el monitor
+
+
 def main():
     watch_mode = '--watch' in sys.argv or '-w' in sys.argv
+    gate_alert_triggered = False   # el beep suena UNA sola vez por ejecucion
 
     try:
         while True:
@@ -256,6 +283,13 @@ def main():
             reward_stats = format_reward_stats(data.get('rewards', []))
 
             display_dashboard(data, model_info, reward_stats)
+
+            # Alerta sonora: gate del DQN abierto -> ya puedes entrenar
+            if not gate_alert_triggered and data['n_transitions'] >= GATE_THRESHOLD:
+                gate_alert_triggered = True
+                print(f"{Colors.GREEN}🔊 GATE ABIERTO: {data['n_transitions']} transiciones — "
+                      f"ya puedes entrenar el modelo (python train_dqn.py){Colors.END}", flush=True)
+                gate_beep()
 
             if not watch_mode:
                 break
