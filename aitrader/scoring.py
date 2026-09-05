@@ -17,6 +17,7 @@ Los hard overrides de seguridad (honeypot/rug/safety) NUNCA se omiten.
 import json
 import logging
 import math
+import os
 import pathlib
 import pickle
 from dataclasses import dataclass, field
@@ -68,6 +69,13 @@ class ScoringEngine:
         self.cfg = cfg
         self.w = cfg.get("scoring_weights", {})
         self.thresholds = cfg.get("scoring_thresholds", {})
+        self.enter_th = self.thresholds.get("enter", 0.75)
+        self.watch_th = self.thresholds.get("watch", 0.40)
+        # Override SOLO en MOCK: valida la politica del DQN con entrada barata.
+        # En LIVE el umbral de produccion (0.75) queda intacto automaticamente.
+        if os.getenv('GMGN_MOCK') == "1":
+            self.enter_th = 0.60
+            logging.warning("[MOCK-PRUEBA] Umbral ENTER forzado a %s para validar politica del DQN.", self.enter_th)
         # --- SRM capa 3: carga segura del modelo (None => determinista) ---
         self.ml_model = None
         self.ml_scaler = None                 # StandardScaler (bundles de regresion)
@@ -293,9 +301,9 @@ class ScoringEngine:
             "[SCORING] %s | dim: momentum=%.3f smart_money=%.3f liquidity=%.3f safety=%.3f dev=%.3f | composite=%.3f",
             f.symbol_safe, dim_momentum, dim_smart, dim_liquidity, dim_safety, dim_dev, composite)
 
-        # --- Decision (mismo umbral; dim_safety sigue siendo obligatoria) ---
-        enter_th = self.thresholds.get("enter", 0.75)
-        watch_th = self.thresholds.get("watch", 0.40)
+        # --- Decision (umbral; dim_safety sigue siendo obligatoria) ---
+        enter_th = self.enter_th
+        watch_th = self.watch_th
 
         if effective >= enter_th and dim_safety >= 0.3:
             v.action = "ENTER"
