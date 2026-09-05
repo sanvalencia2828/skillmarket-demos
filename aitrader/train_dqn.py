@@ -42,7 +42,7 @@ import paper_logger as _plog
 
 JSONL_PATH = pathlib.Path(os.environ.get("DQN_JSONL", str(ROOT / "outputs" / "paper_trades.jsonl")))
 MODEL_PATH = pathlib.Path(os.environ.get("DQN_MODEL_OUT", str(ROOT / "dqn_model.pkl")))
-META_PATH = MODEL_PATH.with_name(MODEL_PATH.stem + ".meta.json")
+META_PATH = MODEL_PATH.with_name("dqn_meta.json")   # scoring.py y monitor.py leen ESTE nombre
 
 MIN_SAMPLES = 100        # umbral de aviso "faltan datos" (entrena igual)
 GATE_TRANSITIONS = 500   # el ScoringEngine solo consume en vivo con >= este numero

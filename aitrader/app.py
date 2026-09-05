@@ -110,7 +110,7 @@ CFG = {
         "dev": 15,
     },
     "scoring_thresholds": {
-        "enter": 0.75,
+        "enter": 0.75,   # restaurado tras el dataset mock TEMP (era 0.15)
         "watch": 0.40,
     },
     "scoring_pool_n": 20,         # cuantos top candidatos enriquecen con kline/holders/traders
@@ -551,10 +551,18 @@ class MockGMGN(GMGNAdapter):
             rows.append(r)
         return sorted(rows, key=lambda t: -t["volume"])
 
+    def _jittered(self, price: float) -> float:
+        """Paseo aleatorio por llamada (±3%) — da varianza a las recompensas RL
+        del dataset mock: ENTER abre posiciones a precios distintos y los EXIT
+        terminales producen PnL positivo/negativo reales."""
+        if not price:
+            return price
+        return price * (1.0 + random.uniform(-0.03, 0.03))
+
     def token_info(self, addr):
         d = self.db[addr]
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        return dict(address=addr, symbol=d["symbol"], price=d["price"],
+        return dict(address=addr, symbol=d["symbol"], price=self._jittered(d["price"]),
                     market_cap=d["market_cap"], volume=d["volume"],
                     volume_24h=d["volume"],
                     creation_timestamp=now - d["age_min"] * 60,
