@@ -1,0 +1,39 @@
+{
+  "n_transitions": 607,
+  "trained_transitions": 607,
+  "policy": "PPO",
+  "algo": "stable-baselines3 PPO (MlpPolicy)",
+  "feature_names": [
+    "volatility",
+    "smart_money_netflow",
+    "holder_pnl_ratio",
+    "trader_buy_ratio",
+    "chg_1h",
+    "chg_5m",
+    "buy_ratio",
+    "turnover",
+    "liquidity",
+    "mcap",
+    "age_min",
+    "bundler",
+    "dev_hold",
+    "top10",
+    "buy_tax",
+    "sell_tax",
+    "rug_ratio",
+    "smart_degen",
+    "renowned",
+    "sm_confluence",
+    "sniper_count",
+    "dev_score"
+  ],
+  "obs_dim": 25,
+  "action_map": {
+    "0": "ENTER",
+    "1": "EXIT",
+    "2": "HOLD",
+    "3": "SKIP"
+  },
+  "timesteps": 10000,
+  "trained_at": "2026-09-05T09:59:06"
+}

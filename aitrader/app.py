@@ -1588,6 +1588,26 @@ class AppState:
 
 ST = AppState()
 
+# Singleton del ScoringEngine. Construirlo cargaría el PPO (torch ~8s) en el
+# primer request y bloquearía uvicorn (single-process) -> UI colgada. Se crea
+# una sola vez al arrancar (startup) y se reutiliza en todos los paths.
+_ENGINE = None
+_ENGINE_LOCK = threading.Lock()
+
+def scoring_engine():
+    """Devuelve el ScoringEngine compartido, creándolo lazy y thread-safe
+    (el primer acceso cuesta ~8s por torch.load del PPO; nunca en un request)."""
+    global _ENGINE
+    if _ENGINE is None:
+        with _ENGINE_LOCK:
+            if _ENGINE is None:
+                try:
+                    _ENGINE = ScoringEngine(CFG)
+                except Exception as e:                    # noqa: BLE001 - degradacion
+                    logging.error("ScoringEngine init fallo (%s): se reintenta sin cache", e)
+                    _ENGINE = None
+    return _ENGINE
+
 def valid_chain(ch: str) -> str:
     ch = (ch or "").lower()
     if ch not in SUPPORTED_CHAINS:
@@ -1793,7 +1813,7 @@ def enrich_and_score(address: str, chain: str = "sol") -> dict:
 
     enrich_with_onchain_signals(g, f)
 
-    engine = ScoringEngine(CFG)
+    engine = scoring_engine()
     v = engine.score(f)
 
     # SRM capa 1: recoleccion silenciosa para entrenamiento offline (aislada)
@@ -1814,7 +1834,7 @@ def enrich_and_score(address: str, chain: str = "sol") -> dict:
 def screen_once(chain: str) -> dict:
     g = ST.adapter_for(chain)
     fx = FeatureExtractor(g)
-    engine = ScoringEngine(CFG)
+    engine = scoring_engine()
 
     # STEP 1 trending（便宜，行内已含富字段；同链 TTL 内复用缓存）→ top-N 粗筛
     candidates = ST.trending_rows(chain)
@@ -2519,6 +2539,13 @@ def index():
 @app.on_event("startup")
 def _maybe_start_public_broadcast():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # Precargar el ScoringEngine (torch/PPO ~8s) en el arranque, no en el
+    # primer request: evita que uvicorn single-process cuelgue la UI.
+    try:
+        scoring_engine()
+        logging.info("[ENGINE] ScoringEngine precargado en startup")
+    except Exception as e:                    # noqa: BLE001 - degradacion
+        logging.error("[ENGINE] pre-carga fallida en startup (%s)", e)
     # 公开演示模式：启动后台守护线程定时刷新真实筛选缓存（仅此线程触发 CLI）。
     if PUBLIC_DEMO:
         threading.Thread(target=_public_broadcast_loop, daemon=True).start()

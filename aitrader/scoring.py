@@ -36,6 +36,11 @@ DQN_MODEL_PATH = pathlib.Path(__file__).parent / "dqn_model.pkl"
 DQN_META_PATH = pathlib.Path(__file__).parent / "dqn_meta.json"
 DQN_GATE_MIN_TRANSITIONS = 500   # gate: sin datos suficientes, el DQN no se consume
 ACTIONS_DQN = {0: "ENTER", 1: "EXIT", 2: "HOLD", 3: "SKIP"}   # orden de ACTION_MAP (train_dqn)
+PPO_MODEL_PATH = pathlib.Path(__file__).parent / "ppo_model.zip"
+PPO_META_PATH = pathlib.Path(__file__).parent / "ppo_meta.json"
+PPO_GATE_MIN_TRANSITIONS = 500   # gate: el PPO solo se consume con >= este numero
+ACTIONS_PPO = {0: "ENTER", 1: "EXIT", 2: "HOLD", 3: "SKIP"}   # orden de trading_env.ACTION_MAP
+_PPO_CACHE = {"model": None, "mtime": 0.0}   # carga perezosa compartida (torch es pesado)
 
 
 @dataclass
@@ -89,6 +94,89 @@ class ScoringEngine:
         self.dqn_meta: dict = {}
         self._dqn_last: dict = {}
         self._load_dqn_model()
+        # --- RL capa 2: PPO (decision directa de la red; override sobre DQN/SRM) ---
+        self.ppo = None
+        self.ppo_meta: dict = {}
+        self._ppo_last: dict = {}
+        self._load_ppo_model()
+
+    def _load_ppo_model(self):
+        """Carga el PPO entrenado SOLO si el gate pasa (>= 500 transiciones).
+
+        Meta barata primero (json); el modelo zip + torch se cargan una sola vez
+        via cache compartida por mtime. Cualquier fallo -> None (degrade a DQN/SRM)."""
+        try:
+            if not PPO_META_PATH.exists() or not PPO_MODEL_PATH.exists():
+                return
+            meta = json.loads(PPO_META_PATH.read_text(encoding="utf-8"))
+            n_tr = int(meta.get("n_transitions") or 0)
+            if n_tr < PPO_GATE_MIN_TRANSITIONS:
+                logging.info("[PPO] gate: %s transiciones < %s -> sin consumo en vivo",
+                             n_tr, PPO_GATE_MIN_TRANSITIONS)
+                return
+            names = meta.get("feature_names") or []
+            if _plog is not None and list(names) != list(_plog.FEATURE_NAMES):
+                logging.warning("[PPO] feature_names del bundle no coincide con FEATURE_NAMES -> ignorado")
+                return
+            mtime = PPO_MODEL_PATH.stat().st_mtime
+            if _PPO_CACHE["model"] is None or _PPO_CACHE["mtime"] != mtime:
+                from stable_baselines3 import PPO as SB3PPO   # import perezoso (torch pesado)
+                _PPO_CACHE["model"] = SB3PPO.load(str(PPO_MODEL_PATH), device="cpu")
+                _PPO_CACHE["mtime"] = mtime
+            self.ppo = _PPO_CACHE["model"]
+            self.ppo_meta = {"n_transitions": n_tr, "action_map": meta.get("action_map") or {},
+                             "trained_at": meta.get("trained_at"), "algo": meta.get("algo")}
+            logging.info("[PPO] modelo activo (n=%s, %s)", n_tr, meta.get("algo"))
+        except Exception as e:                    # noqa: BLE001 - degradacion
+            self.ppo = None
+            logging.info("[PPO] ppo_model.zip no usable (%s) -> degrade a DQN/SRM", e)
+
+    def _ppo_decision(self, f):
+        """Decision DIRECTA de la politica PPO. Devuelve (action_name, prob, info)
+        o None si inactivo/fallo (degrade a DQN/SRM/determinista).
+
+        obs = 22 features de mercado (FEATURE_NAMES, mismo orden del entrenamiento)
+              + 3 de posicion (is_holding, unrealized_pnl, dist_to_tp) desde
+              position_manager — identico a trading_env._build_observation."""
+        if self.ppo is None or _plog is None:
+            return None
+        try:
+            import position_manager as pos_mgr
+            feats = np.asarray(_plog.vectorize(self._token_feature_dict(f)), dtype=np.float32)
+            addr = getattr(f, "address", None)
+            current_price = float(getattr(f, "price", 0.0) or 0.0)
+            pos = pos_mgr.get_position(addr)
+            if pos:
+                entry = float(pos.get("entry_price") or 0.0)
+                tp = float(pos.get("tp") or 0.0)
+                pnl = (current_price - entry) / entry if entry > 0 else 0.0
+                dist_tp = (tp - current_price) / current_price if (tp > 0 and current_price > 0) else 0.0
+                holding = 1.0
+            else:
+                pnl = dist_tp = holding = 0.0
+            obs = np.concatenate([feats, np.array([holding, pnl, dist_tp], dtype=np.float32)])
+            obs = np.nan_to_num(obs.reshape(1, -1).astype(np.float32),
+                                nan=0.0, posinf=1e6, neginf=-1e6)
+            action, _ = self.ppo.predict(obs, deterministic=True)
+            act_idx = int(np.asarray(action).reshape(-1)[0])
+            amap = self.ppo_meta.get("action_map") or {}
+            act_name = amap.get(str(act_idx)) or ACTIONS_PPO.get(act_idx, "SKIP")
+            conf = 0.5
+            try:
+                import torch as th
+                obs_t = th.as_tensor(obs, dtype=th.float32)
+                dist = self.ppo.policy.get_distribution(obs_t)
+                probs = dist.distribution.probs.detach().cpu().numpy()[0]
+                conf = float(probs[act_idx])
+                self._ppo_last = {"probs": [round(float(p), 3) for p in probs.tolist()],
+                                  "greedy": int(np.argmax(probs))}
+            except Exception:
+                self._ppo_last = {}
+            return act_name, conf, self._ppo_last
+        except Exception as e:                    # noqa: BLE001 - degradacion
+            logging.warning("[PPO] inferencia fallo (%s) -> degradando a DQN/SRM", e)
+            self.ppo = None
+            return None
 
     def _load_dqn_model(self):
         """Carga el DQN entrenado offline SOLO si el gate pasa (>= 500 transiciones).
@@ -315,6 +403,33 @@ class ScoringEngine:
         logging.info(
             "[VERDICT] %s | action=%s confidence=%.3f flags=%s reasons=%s",
             f.symbol_safe, v.action, v.confidence, flags, reasons[:3])
+
+        # --- RL capa: PPO (decision directa de la red; override del veredicto
+        # de umbrales). Va DESPUES del bloque de decision y ANTES de los hard
+        # overrides. Si PPO dice EXIT/SKIP, manda sobre ENTER/WATCH del umbral.
+        try:
+            pp = self._ppo_decision(f)
+            if pp is not None:
+                act, conf, info = pp
+                if act == "EXIT":
+                    v.action = "EXIT"
+                    v.confidence = _clamp(conf)
+                    v.reasons.insert(0, f"PPO action=EXIT p={conf:.2f}")
+                elif act == "SKIP":
+                    v.action = "SKIP"
+                    v.confidence = _clamp(conf)
+                    v.reasons.insert(0, f"PPO action=SKIP p={conf:.2f}")
+                elif act == "ENTER":
+                    v.action = "ENTER"
+                    v.confidence = _clamp(conf)
+                    v.reasons.insert(0, f"PPO action=ENTER p={conf:.2f}")
+                else:   # HOLD: no cambia la decision, solo auditoria
+                    v.reasons.insert(0, f"PPO action=HOLD p={conf:.2f}")
+                logging.info("[PPO] %s | action=%s conf=%.3f greedy=%s",
+                             f.symbol_safe, act, conf,
+                             ACTIONS_PPO.get((info or {}).get('greedy'), '?'))
+        except Exception as e:                    # noqa: BLE001 - degradacion
+            logging.warning("[PPO] override fallo (%s) -> veredicto sin PPO", e)
 
         # Hard overrides (never enter these)
         if f.honeypot:
