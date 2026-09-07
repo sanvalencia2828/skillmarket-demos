@@ -592,14 +592,18 @@ class ScoringEngine:
 
     def _score_safety(self, f, flags, reasons):
         s = 0.0
-        if f.renounced_mint and f.renounced_freeze:
+        if f.renounced_mint_known and f.renounced_freeze_known and f.renounced_mint and f.renounced_freeze:
             s += 0.5
             reasons.append("mint + freeze renunciados")
-        elif f.renounced_mint:
+        elif f.renounced_mint_known and f.renounced_mint:
             s += 0.3
             reasons.append("mint renunciado")
-        else:
+        elif f.renounced_mint_known and not f.renounced_mint:
             flags.append("mint_not_renounced")
+        if not f.renounced_mint_known:
+            flags.append("unknown_mint_renounce")
+        if not f.renounced_freeze_known:
+            flags.append("unknown_freeze_renounce")
 
         s += 0.5 * _clamp((0.40 - f.top10) / 0.40)
         if f.top10 > 0.3:

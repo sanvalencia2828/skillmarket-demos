@@ -860,6 +860,7 @@ class TokenFeatures:
     liquidity: float = 0.0; buy_ratio: float = 0.5; turnover: float = 0.0
     # 安全/筹码（真实字段，无合成安全分）
     honeypot: bool = False; renounced_mint: bool = False; renounced_freeze: bool = False
+    renounced_mint_known: bool = True; renounced_freeze_known: bool = True
     burn_ratio: float = 0.0; buy_tax: float = 0.0; sell_tax: float = 0.0; rug_ratio: float = 0.0
     bundler: float = 0.0; dev_hold: float = 0.0; top10: float = 0.0
     # 共识：聪明钱 + 知名 KOL 计数
@@ -905,6 +906,8 @@ class FeatureExtractor:
             honeypot=_b(row.get("is_honeypot")),
             renounced_mint=_b(row.get("renounced_mint")),
             renounced_freeze=_b(row.get("renounced_freeze_account")),
+            renounced_mint_known=row.get("renounced_mint") is not None,
+            renounced_freeze_known=row.get("renounced_freeze_account") is not None,
             burn_ratio=_f(row.get("burn_ratio")),
             buy_tax=_f(row.get("buy_tax")), sell_tax=_f(row.get("sell_tax")),
             rug_ratio=_f(row.get("rug_ratio")),
@@ -959,7 +962,7 @@ def hard_gates(f: TokenFeatures):
     # gate 1 避雷（真实布尔/数值字段，无合成安全分）
     if f.honeypot:
         return False, "REJECT 避雷：honeypot 命中", 1
-    if CFG["require_renounced_mint"] and not f.renounced_mint:
+    if CFG["require_renounced_mint"] and f.renounced_mint_known and not f.renounced_mint:
         return False, "REJECT 避雷：未放弃增发权（可无限增发）", 1
     if f.buy_tax > CFG["max_buy_tax"] or f.sell_tax > CFG["max_sell_tax"]:
         return False, f"REJECT 避雷：税过高 买{f.buy_tax:.0%}/卖{f.sell_tax:.0%}", 1
@@ -1031,7 +1034,7 @@ def enrich_with_onchain_signals(g, f: TokenFeatures):
     # gate 1 避雷（真实布尔/数值字段，无合成安全分）
     if f.honeypot:
         return False, "REJECT 避雷：honeypot 命中", 1
-    if CFG["require_renounced_mint"] and not f.renounced_mint:
+    if CFG["require_renounced_mint"] and f.renounced_mint_known and not f.renounced_mint:
         return False, "REJECT 避雷：未放弃增发权（可无限增发）", 1
     if f.buy_tax > CFG["max_buy_tax"] or f.sell_tax > CFG["max_sell_tax"]:
         return False, f"REJECT 避雷：税过高 买{f.buy_tax:.0%}/卖{f.sell_tax:.0%}", 1
@@ -1971,7 +1974,8 @@ def _reject(f, reason, gate_idx, v):
 
 def _feat(f):
     return dict(honeypot=f.honeypot, renounced=(f.renounced_mint and f.renounced_freeze),
-                renounced_mint=f.renounced_mint, buy_tax=round(f.buy_tax, 3), sell_tax=round(f.sell_tax, 3),
+                renounced_mint=f.renounced_mint, renounced_freeze=f.renounced_freeze,
+                renounced_mint_known=f.renounced_mint_known, renounced_freeze_known=f.renounced_freeze_known,
                 bundler=round(f.bundler, 2), dev_hold=round(f.dev_hold, 2), top10=round(f.top10, 2),
                 smart_degen=f.smart_degen, renowned=f.renowned, sm_confluence=f.sm_confluence,
                 sniper_count=f.sniper_count, chg_1h=round(f.chg_1h, 3), chg_5m=round(f.chg_5m, 3),
