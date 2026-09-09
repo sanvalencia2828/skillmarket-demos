@@ -50,8 +50,17 @@ ENV_PATH = pathlib.Path.home() / ".config" / "gmgn" / ".env"
 # ──────────────────────────────────────────────────────────────────────────
 # 0. 硬参数（LLM 无权修改）
 # ──────────────────────────────────────────────────────────────────────────
+CHAIN_CONFIG = {
+    "sol": {"max_dev_hold": 0.10, "max_top10": 0.20,
+            "weights": {"momentum": 0.35, "smart_money": 0.30, "liquidity": 0.15, "safety": 0.10, "dev": 0.10}},
+    "robinhood": {"max_dev_hold": 0.25, "max_top10": 0.35,
+                  "weights": {"momentum": 0.20, "smart_money": 0.40, "liquidity": 0.10, "safety": 0.15, "dev": 0.15}},
+    "bsc": {"max_dev_hold": 0.15, "max_top10": 0.25,
+            "weights": {"momentum": 0.30, "smart_money": 0.25, "liquidity": 0.20, "safety": 0.15, "dev": 0.10}},
+}
 CFG = {
     "chain": "sol",
+    "chain_config": CHAIN_CONFIG,
     # 尽调现在直接用 trending 行字段（零额外 API 调用），故粗筛只作 sanity 上限，
     # 不再像旧版那样砍到极小（砍小反而只剩榜首最新/刷量币、聪明钱标记全为 0）。
     "top_n_prefilter": 100,        # 参与筛选的 trending 行数上限
@@ -855,6 +864,7 @@ def _security_unsafe(sec: dict, chain: str) -> str | None:
 class TokenFeatures:
     address: str; symbol_raw: str; symbol_safe: str
     price: float; mcap: float; vol_1h: float; age_min: float; chg_1h: float
+    chain: str = "sol"
     # 动能（趋势跟随）
     chg_5m: float = 0.0; buys: int = 0; sells: int = 0; swaps: int = 0
     liquidity: float = 0.0; buy_ratio: float = 0.5; turnover: float = 0.0
@@ -896,6 +906,7 @@ class FeatureExtractor:
         turnover = vol / mcap if mcap > 0 else 0.0
         return TokenFeatures(
             address=row["address"], symbol_raw=raw, symbol_safe=sanitize(raw),
+            chain=row.get("chain", "sol"),
             price=_f(row.get("price")), mcap=mcap,
             vol_1h=vol, age_min=age_min,
             # trending 的 price_change_percent1h 是百分比数值(46.96=+46.96%)，/100 统一为小数
@@ -959,6 +970,7 @@ def _kline_pattern(klines):
 #    gate_idx 与前端漏斗对齐：1=避雷 2=共识 3=ML排序 4=评分
 # ──────────────────────────────────────────────────────────────────────────
 def hard_gates(f: TokenFeatures):
+    chain_cfg = CHAIN_CONFIG.get(getattr(f, "chain", "sol"), CHAIN_CONFIG["sol"])
     # gate 1 避雷（真实布尔/数值字段，无合成安全分）
     if f.honeypot:
         return False, "REJECT 避雷：honeypot 命中", 1
@@ -972,10 +984,10 @@ def hard_gates(f: TokenFeatures):
     mx_bund = CFG["max_bundler_ratio"]
     if f.bundler > mx_bund:
         return False, f"REJECT 避雷：bundler {f.bundler:.0%} > {mx_bund:.0%}", 1
-    mx_dev = CFG["max_dev_holding_pct"]
+    mx_dev = chain_cfg["max_dev_hold"]
     if f.dev_hold > mx_dev:
         return False, f"REJECT 避雷：dev 持仓 {f.dev_hold:.0%} > {mx_dev:.0%}", 1
-    mx_t10 = CFG["max_top10_concentration"]
+    mx_t10 = chain_cfg["max_top10"]
     if f.top10 > mx_t10:
         return False, f"REJECT 避雷：top10 {f.top10:.0%} 集中", 1
     # gate 2 共识：smart_degen + renowned KOL 计数
@@ -1032,6 +1044,7 @@ def enrich_with_onchain_signals(g, f: TokenFeatures):
     except Exception as e:
         logging.warning("[ENRICH] %s | traders fallo: %s", f.symbol_safe, e)
     # gate 1 避雷（真实布尔/数值字段，无合成安全分）
+    chain_cfg = CHAIN_CONFIG.get(getattr(f, "chain", "sol"), CHAIN_CONFIG["sol"])
     if f.honeypot:
         return False, "REJECT 避雷：honeypot 命中", 1
     if CFG["require_renounced_mint"] and f.renounced_mint_known and not f.renounced_mint:
@@ -1042,9 +1055,9 @@ def enrich_with_onchain_signals(g, f: TokenFeatures):
         return False, f"REJECT 避雷：rug 比例 {f.rug_ratio:.0%} > {CFG['max_rug_ratio']:.0%}", 1
     if f.bundler > CFG["max_bundler_ratio"]:
         return False, f"REJECT 避雷：bundler {f.bundler:.0%} > {CFG['max_bundler_ratio']:.0%}", 1
-    if f.dev_hold > CFG["max_dev_holding_pct"]:
-        return False, f"REJECT 避雷：dev 持仓 {f.dev_hold:.0%} > {CFG['max_dev_holding_pct']:.0%}", 1
-    if f.top10 > CFG["max_top10_concentration"]:
+    if f.dev_hold > chain_cfg["max_dev_hold"]:
+        return False, f"REJECT 避雷：dev 持仓 {f.dev_hold:.0%} > {chain_cfg['max_dev_hold']:.0%}", 1
+    if f.top10 > chain_cfg["max_top10"]:
         return False, f"REJECT 避雷：top10 {f.top10:.0%} 集中", 1
     # gate 2 共识：smart_degen + renowned KOL 计数
     if f.sm_confluence < CFG["min_smart_money_confluence"]:
@@ -1768,7 +1781,7 @@ def build_features_from_info(info: dict, security: dict, chain: str):
     price_obj = info.get("price", {})
     price = _f(price_obj.get("price") if isinstance(price_obj, dict) else price_obj)
 
-    row = dict(address=info.get("address", ""),
+    row = dict(address=info.get("address", ""), chain=chain,
                symbol=info.get("symbol", ""),
                name=info.get("name", ""),
                price=price,

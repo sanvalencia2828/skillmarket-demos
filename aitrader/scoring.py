@@ -34,13 +34,14 @@ except Exception:                                 # noqa: BLE001 - degradacion
 SRM_MODEL_PATH = pathlib.Path(__file__).parent / "srm_model.pkl"
 DQN_MODEL_PATH = pathlib.Path(__file__).parent / "dqn_model.pkl"
 DQN_META_PATH = pathlib.Path(__file__).parent / "dqn_meta.json"
-DQN_GATE_MIN_TRANSITIONS = 500   # gate: sin datos suficientes, el DQN no se consume
+DQN_GATE_MIN_TRANSITIONS = 1000  # reactivar solo con suficientes transiciones reales
 ACTIONS_DQN = {0: "ENTER", 1: "EXIT", 2: "HOLD", 3: "SKIP"}   # orden de ACTION_MAP (train_dqn)
 PPO_MODEL_PATH = pathlib.Path(__file__).parent / "ppo_model.zip"
 PPO_META_PATH = pathlib.Path(__file__).parent / "ppo_meta.json"
-PPO_GATE_MIN_TRANSITIONS = 500   # gate: el PPO solo se consume con >= este numero
+PPO_GATE_MIN_TRANSITIONS = 1000  # reactivar solo con suficientes transiciones reales
 ACTIONS_PPO = {0: "ENTER", 1: "EXIT", 2: "HOLD", 3: "SKIP"}   # orden de trading_env.ACTION_MAP
 _PPO_CACHE = {"model": None, "mtime": 0.0}   # carga perezosa compartida (torch es pesado)
+RL_INFERENCE_ENABLED = os.getenv("ENABLE_RL_INFERENCE", "0") == "1"
 
 
 @dataclass
@@ -93,12 +94,14 @@ class ScoringEngine:
         self.dqn = None
         self.dqn_meta: dict = {}
         self._dqn_last: dict = {}
-        self._load_dqn_model()
+        if RL_INFERENCE_ENABLED:
+            self._load_dqn_model()
         # --- RL capa 2: PPO (decision directa de la red; override sobre DQN/SRM) ---
         self.ppo = None
         self.ppo_meta: dict = {}
         self._ppo_last: dict = {}
-        self._load_ppo_model()
+        if RL_INFERENCE_ENABLED:
+            self._load_ppo_model()
 
     def _load_ppo_model(self):
         """Carga el PPO entrenado SOLO si el gate pasa (>= 500 transiciones).
@@ -335,7 +338,9 @@ class ScoringEngine:
         dim_safety = self._score_safety(f, flags, reasons)
         dim_dev = self._score_dev(f, flags, reasons)
 
-        weights = self.w
+        chain = getattr(f, "chain", "sol")
+        chain_cfg = self.cfg.get("chain_config", {}).get(chain, {})
+        weights = chain_cfg.get("weights") or self.w
         total_w = sum(weights.values()) or 1.0
         composite = (
             weights.get("momentum", 30) * dim_momentum +
@@ -374,7 +379,7 @@ class ScoringEngine:
                          f.symbol_safe, composite, ml_score)
 
         # --- RL capa: DQN con gate (si esta activo, su score manda sobre el blend) ---
-        dqn_score = self._dqn_score(f)
+        dqn_score = self._dqn_score(f) if RL_INFERENCE_ENABLED else None
         if dqn_score is not None:
             effective = dqn_score
             last = self._dqn_last or {}
@@ -408,7 +413,7 @@ class ScoringEngine:
         # de umbrales). Va DESPUES del bloque de decision y ANTES de los hard
         # overrides. Si PPO dice EXIT/SKIP, manda sobre ENTER/WATCH del umbral.
         try:
-            pp = self._ppo_decision(f)
+            pp = self._ppo_decision(f) if RL_INFERENCE_ENABLED else None
             if pp is not None:
                 act, conf, info = pp
                 if act == "EXIT":
