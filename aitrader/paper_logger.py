@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import pathlib
+import os
 import threading
 import time
 
@@ -48,6 +49,31 @@ FEATURE_NAMES = [
 NEUTRAL = {"dev_score": 0.5}
 
 _LOCK = threading.Lock()
+
+
+def save_to_supabase(record: dict) -> None:
+    """Persiste un registro remoto si Supabase esta configurado.
+
+    La persistencia remota es opcional: ningun error de red, credencial o
+    importacion puede interrumpir el flujo de trading ni el JSONL local.
+    """
+    try:
+        url = os.getenv("SUPABASE_URL", "").strip()
+        key = os.getenv("SUPABASE_KEY", "").strip()
+        if not url or not key:
+            return
+        from supabase import create_client
+
+        row = {
+            "ts": record.get("ts") or record.get("timestamp"),
+            "kind": record.get("kind"),
+            "address": record.get("address") or record.get("token_address"),
+            "chain": record.get("chain"),
+            "record": record,
+        }
+        create_client(url, key).table("paper_trades").insert(row).execute()
+    except Exception as e:  # noqa: BLE001 - persistencia secundaria
+        _log.warning("supabase persistencia omitida: %s", e)
 
 
 def vectorize(features: dict, feature_names: list | None = None) -> list:
@@ -135,6 +161,7 @@ def log_decision_for_training(features_dict: dict, verdict, token_address: str,
         with _LOCK:
             with JSONL_PATH.open("a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
+        save_to_supabase(rec)
         return rec
     except Exception as e:                       # noqa: BLE001 - contrato: silencioso
         _log.warning("paper_logger fallo (no afecta flujo principal): %s", e)
@@ -162,5 +189,6 @@ def log_rl_transition(state, action, reward, next_state=None, done=False,
         with _LOCK:
             with JSONL_PATH.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record) + "\n")
+        save_to_supabase(record)
     except Exception:
         return None  # Degradación silenciosa
