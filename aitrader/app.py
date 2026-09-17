@@ -24,6 +24,7 @@ app.py — GMGN AI Trader 本地后端 (FastAPI)
 """
 
 from __future__ import annotations
+import asyncio
 import json, logging, os, re, shlex, random, datetime, pathlib, threading, math, time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, asdict
@@ -279,7 +280,7 @@ class LiveGMGN(GMGNAdapter):
         return resp
 
     def _cli(self, *args) -> dict:
-        data = gmgn.cli("info", [*args, "--chain", self.chain], timeout=45, env=self.env)
+        data = gmgn.cli("info", [*args, "--chain", self.chain], timeout=10, env=self.env)
         if data is None:
             raise RuntimeError("gmgn-cli error: sin respuesta")
         return self._check_code(data)
@@ -290,7 +291,7 @@ class LiveGMGN(GMGNAdapter):
         if parts[:1] != ["gmgn-cli"]:
             raise RuntimeError("命令必须以 gmgn-cli 开头")
         label = parts[2] if len(parts) > 2 else parts[1]
-        data = gmgn.cli(label, parts[1:], timeout=45, env=self.env)
+        data = gmgn.cli(label, parts[1:], timeout=10, env=self.env)
         if data is None:
             raise RuntimeError("gmgn-cli error: sin respuesta")
         return self._check_code(data)
@@ -2438,18 +2439,25 @@ def api_run(r: RunIn):
     return JSONResponse(cached)
 
 @app.get("/api/enrich")
-def api_enrich(address: str, chain: str = "sol"):
+async def api_enrich(address: str, chain: str = "sol"):
     """Enriquecimiento on-demand para 1 token (kline + holders + traders + scoring).
     Path lento — solo se llama cuando el usuario hace click en un token."""
     _block_if_public()
     if not address:
         raise HTTPException(400, "falta address")
     try:
-        return JSONResponse(enrich_and_score(address, chain))
+        return await asyncio.wait_for(
+            asyncio.to_thread(enrich_and_score, address, chain),
+            timeout=10,
+        )
+    except asyncio.TimeoutError:
+        logging.error("[ENRICH] timeout after 10s: %s", address[:8])
+        return JSONResponse({"error": "La consulta tardó demasiado", "address": address}, status_code=504)
     except RateLimitError as e:
-        raise HTTPException(429, f"GMGN 限流：{e}")
+        return JSONResponse({"error": f"GMGN rate limit: {e}", "address": address}, status_code=429)
     except Exception as e:
-        raise HTTPException(500, f"enrich fallo：{e}")
+        logging.error("[ENRICH] fallo: %s", e, exc_info=True)
+        return JSONResponse({"error": f"enrich fallo: {e}", "address": address}, status_code=500)
 
 def _sample_activity(g: GMGNAdapter, addr: str, target: int) -> dict:
     """抽样最近 N 笔逐笔交易：翻页累积到 target（或翻页耗尽），最多 4 页防止烧配额。"""
@@ -2544,7 +2552,7 @@ def api_positions(chain: str = "sol"):
 
 # 静态前端（同源，避免 CORS）。把上一版 dashboard 存为 static/index.html
 if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
 @app.get("/")
 def index():

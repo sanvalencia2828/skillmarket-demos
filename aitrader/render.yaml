@@ -1,18 +1,11 @@
 services:
   - type: web
-    name: gmgn-aitrader
-    runtime: python
-    plan: free
+    name: aitrader-volatilidad
+    env: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: GMGN_API_KEY
+        sync: false
       - key: PYTHON_VERSION
-        value: "3.11.9"
-      - key: GMGN_MOCK
-        value: "1"
-      - key: PUBLIC_DEMO
-        value: "0"
-      - key: HOST
-        value: "0.0.0.0"
-    healthCheckPath: /api/status
-    autoDeploy: true
+        value: 3.11.0

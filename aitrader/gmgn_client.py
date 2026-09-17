@@ -136,8 +136,11 @@ class GMGNClient:
         max_attempts = 2 if subcommand in ("trending", "trenches") else 3
         for attempt in range(max_attempts):
             try:
+                process_env = os.environ.copy()
+                if env:
+                    process_env.update(env)
                 r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                                   errors="replace", timeout=timeout, env=env)
+                                   errors="replace", timeout=timeout, env=process_env)
             except FileNotFoundError:
                 logging.error("gmgn-cli/node no encontrado en PATH.")
                 return None

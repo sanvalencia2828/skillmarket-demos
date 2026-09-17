@@ -478,7 +478,7 @@ td{padding:5px 10px;vertical-align:middle}
       <div class="fld"><label>GMGN API KEY</label><input id="apiKey" type="password" data-i18n-ph="cfg_apikey_ph" autocomplete="off"><div class="hint" data-i18n="cfg_apikey_hint">用于认证 OpenAPI 请求。已配过就无需重填——刷新页面会自动用环境 key 连接。</div></div>
       <div class="fld"><label data-i18n="cfg_signkey_label">GMGN SIGNING KEY · 请求签名密钥</label><textarea id="signKey" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----" autocomplete="off"></textarea><div class="hint" data-i18n="cfg_signkey_hint">Ed25519 签名密钥，非钱包私钥；仅发往本地后端</div></div>
       <div class="fld"><label data-i18n="cfg_mode_label">成交模式</label><div class="hint" data-i18n="cfg_mode_hint" style="margin-top:7px">在右上角 MODE 图标点击切换 实盘/模拟盘；链在 CHAIN 切换（存浏览器，不写文件）</div></div>
-      <div class="mwarn" data-i18n="cfg_mwarn">⚠ 两个 key 只发送到你本机后端 (127.0.0.1)，不离开本机、不写浏览器存储。SHADOW 下「一键买入/平仓」只落日志不真实发单；切 LIVE 才会经签名密钥真实成交。</div>
+      <div class="mwarn" data-i18n="cfg_mwarn">⚠ 两个 key 只发送到你本机后端，不离开本机、不写浏览器存储。SHADOW 下「一键买入/平仓」只落日志不真实发单；切 LIVE 才会经签名密钥真实成交。</div>
     </div>
     <div class="mfoot"><button class="mbtn" id="saveBtn" onclick="saveCfg()" data-i18n="cfg_save">保存到本地后端</button><button class="mbtn ghost" onclick="closeCfg()" data-i18n="btn_close">关闭</button><span class="savestate" id="saveState"></span></div>
   </div>
@@ -490,7 +490,7 @@ td{padding:5px 10px;vertical-align:middle}
     <div class="mbody">
       <div class="fld"><label data-i18n="pipe_cmd_label">GMGN-CLI 热榜命令</label><textarea id="trendCmd" rows="3" placeholder="gmgn-cli market trending ..." autocomplete="off" spellcheck="false"></textarea><div class="hint" data-i18n="pipe_cmd_hint">每轮扫描执行的完整命令；须以 <code>gmgn-cli market trending</code> 开头，自动补 <code>--raw</code>。改 --limit / --interval / --order-by / --filter / --chain 即可。</div></div>
       <div class="fld"><label data-i18n="pipe_poll_label">轮询间隔（秒）</label><div class="szrow"><input id="pollSec" type="number" step="1" min="5"><span class="unit">s</span></div><div class="hint" data-i18n="pipe_poll_hint">前端每隔多久打一次 /api/run。默认 30s；低于 5s 会打爆 GMGN 配额。</div></div>
-      <div class="mwarn" data-i18n="pipe_mwarn">⚠ 命令在你本机后端执行（127.0.0.1），仅限热榜命令。保存后立即生效：命令下一轮起用，间隔即时重设。</div>
+      <div class="mwarn" data-i18n="pipe_mwarn">⚠ 命令在你本机后端执行，仅限热榜命令。保存后立即生效：命令下一轮起用，间隔即时重设。</div>
     </div>
     <div class="mfoot"><button class="mbtn" onclick="savePipe()" data-i18n="pipe_save">保存并立即生效</button><button class="mbtn ghost" onclick="resetPipeCmd()" data-i18n="pipe_reset">恢复默认命令</button><button class="mbtn ghost" onclick="closePipe()" data-i18n="btn_close">关闭</button><span class="savestate" id="pipeState"></span></div>
   </div>
@@ -558,7 +558,7 @@ const I18N={
     cfg_signkey_hint:'Ed25519 签名密钥，非钱包私钥；仅发往本地后端',
     cfg_mode_label:'成交模式',
     cfg_mode_hint:'链在右上角 CHAIN 切换（存浏览器，不写文件）',
-    cfg_mwarn:'⚠ 两个 key 只发送到你本机后端 (127.0.0.1)，不离开本机、不写浏览器存储。SHADOW 下「一键买入/平仓」只落日志不真实发单；切 LIVE 才会经签名密钥真实成交。',
+    cfg_mwarn:'⚠ 两个 key 只发送到你本机后端，不离开本机、不写浏览器存储。SHADOW 下「一键买入/平仓」只落日志不真实发单；切 LIVE 才会经签名密钥真实成交。',
     cfg_save:'保存到本地后端',
     btn_close:'关闭', btn_cancel:'取消',
     pipe_h2:'筛选设置 · 热榜命令 / 轮询',
@@ -566,7 +566,7 @@ const I18N={
     pipe_cmd_hint:'每轮扫描执行的完整命令；须以 <code>gmgn-cli market trending</code> 开头，自动补 <code>--raw</code>。改 --limit / --interval / --order-by / --filter / --chain 即可。',
     pipe_poll_label:'轮询间隔（秒）',
     pipe_poll_hint:'前端每隔多久打一次 /api/run。建议 ≥30s 省配额；先感受可短些。',
-    pipe_mwarn:'⚠ 命令在你本机后端执行（127.0.0.1），仅限热榜命令。保存后立即生效：命令下一轮起用，间隔即时重设。',
+    pipe_mwarn:'⚠ 命令在你本机后端执行，仅限热榜命令。保存后立即生效：命令下一轮起用，间隔即时重设。',
     pipe_save:'保存并立即生效', pipe_reset:'恢复默认命令',
     pipe_reset_btn:'↺ 重置', pipe_reset_btn_title:'重置本链热榜命令为默认（服务端持久）',
     toast_reset_done:'筛选条件已恢复默认', toast_reset_fail:(m)=>`重置失败：${m}`,
@@ -725,7 +725,7 @@ const I18N={
     cfg_signkey_hint:'Ed25519 signing key, not a wallet private key; sent only to the local backend',
     cfg_mode_label:'Trade mode',
     cfg_mode_hint:'Switch chain at top-right CHAIN (stored in browser, not written to file)',
-    cfg_mwarn:'⚠ Both keys are sent only to your local backend (127.0.0.1)—they never leave your machine or touch browser storage. In SHADOW, one-click buy/sell only logs; switch to LIVE for real settlement via the signing key.',
+    cfg_mwarn:'⚠ Both keys are sent only to your local backend—they never leave your machine or touch browser storage. In SHADOW, one-click buy/sell only logs; switch to LIVE for real settlement via the signing key.',
     cfg_save:'Save to local backend',
     btn_close:'Close', btn_cancel:'Cancel',
     pipe_h2:'Screening Settings · Trending Command / Poll',
@@ -733,7 +733,7 @@ const I18N={
     pipe_cmd_hint:'Full command run each scan; must start with <code>gmgn-cli market trending</code>, <code>--raw</code> auto-added. Tune --limit / --interval / --order-by / --filter / --chain.',
     pipe_poll_label:'Poll interval (seconds)',
     pipe_poll_hint:'How often the frontend calls /api/run. ≥30s recommended to save quota; shorter for first feel.',
-    pipe_mwarn:'⚠ The command runs on your local backend (127.0.0.1), trending commands only. Takes effect on save: command from the next round, interval reset instantly.',
+    pipe_mwarn:'⚠ The command runs on your local backend, trending commands only. Takes effect on save: command from the next round, interval reset instantly.',
     pipe_save:'Save & apply now', pipe_reset:'Restore default command',
     pipe_reset_btn:'↺ Reset', pipe_reset_btn_title:'Reset this chain’s trending command to default (persisted server-side)',
     toast_reset_done:'Filters restored to default', toast_reset_fail:(m)=>`Reset failed: ${m}`,
@@ -896,9 +896,8 @@ const svg=(n,c='currentColor')=>`<svg viewBox="0 0 24 24" fill="none" stroke="${
 const fill=n=>`<svg viewBox="0 0 24 24" fill="currentColor" stroke="none">${I[n]}</svg>`;
 
 /* ── backend ── */
-/* 同源请求：后端(127.0.0.1:8000)托管本页时走相对路径，经隧道访问也回到本机后端；
-   仅 file:// 直接打开时回退到本地端口。连不上(纯静态/GitHub Pages)→ 自动 DEMO。 */
-const API=location.protocol==='file:'?"http://127.0.0.1:8000":"";
+/* Same-origin requests work locally and on Render. */
+const API="";
 let source="demo", bePolling=false, liveMode=false, tradingLocked=false;
 let pollMs=30000, pollTimer=null, defaultTrendCmd="", curChain="sol", beReady=false, buyAmount=0.01;
 let onlyHeld=false;            // TOKEN 旁警告图标：只看当前持仓的币
@@ -1220,13 +1219,27 @@ async function renderDetail(){
   if(r.address && (r.status==='action'||r.status==='watch')) enrichToken(r.address);
 }
 
+async function fetchDossier(address, chain=curChain){
+  const controller=new AbortController();
+  const timeoutId=setTimeout(()=>controller.abort(),15000);
+  try{
+    const r=await fetch(API+'/api/enrich?address='+encodeURIComponent(address)+'&chain='+encodeURIComponent(chain),{signal:controller.signal});
+    const text=await r.text();
+    let data={};
+    try{data=text?JSON.parse(text):{};}catch(_){data={error:'Respuesta inválida del backend'};}
+    if(!r.ok) throw new Error(data.error||`HTTP ${r.status}`);
+    return data;
+  }finally{
+    clearTimeout(timeoutId);
+  }
+}
+
 async function enrichToken(address){
   const det=document.getElementById('detail');
-  det.innerHTML+=`<div style="margin-top:10px;color:var(--amber)" data-i18n="detail_enriching">⏳ Analizando on-chain...</div>`;
+  const loadingId='enrich-loading-'+Date.now();
+  det.innerHTML+=`<div id="${loadingId}" style="margin-top:10px;color:var(--amber)" data-i18n="detail_enriching">⏳ Analizando on-chain...</div>`;
   try{
-    const r=await fetch(API+'/api/enrich?address='+encodeURIComponent(address)+'&chain='+curChain);
-    if(!r.ok){det.innerHTML+=`<div style="color:var(--clay)">Error ${r.status}</div>`;return;}
-    const d=await r.json();
+    const d=await fetchDossier(address,curChain);
     if(d.error){det.innerHTML+=`<div style="color:var(--clay)">${d.error}</div>`;return;}
     const v=d.verdict||{};
     const dims=v.dimension_scores||{};
@@ -1239,7 +1252,10 @@ async function enrichToken(address){
       ${flags.length?`<div style="margin-top:4px;font-size:10.5px;color:var(--clay)">⚑ ${flags.join(', ')}</div>`:''}
     </div>`;
   }catch(e){
-    det.innerHTML+=`<div style="color:var(--clay)">Fallo: ${e.message}</div>`;
+    const message=e.name==='AbortError'?'La consulta agotó el tiempo de espera.':e.message;
+    det.innerHTML+=`<div style="color:var(--clay)">Fallo: ${message}</div>`;
+  }finally{
+    document.getElementById(loadingId)?.remove();
   }
 }
 
@@ -1694,7 +1710,7 @@ const WLK={
     self_deal_note:'⚠ 自产自销，两项分数已大幅打折',
     yes:'检出 ⚠', no:'未检出 ✓', none:'无',
     u_sec:' 秒', u_min:' 分', u_hr:' 小时', u_day:' 天',
-    off:'钱包评估需要本地后端在运行（127.0.0.1:8000）。',
+    off:'钱包评估需要本地后端在运行。',
     need_key:'本地后端还没配置 GMGN API Key，已为你打开配置窗口——填好 key 保存后再点一次评估。',
     no_trades_note:n=>`该地址没有真实买卖记录${n>0?`（链上持有 ${n} 个代币，但都不是交易得来的）`:''}，无法计算盈亏分布。`,
     bt_no_trades:'该地址暂无真实交易记录，无法评估/回测。'},
@@ -1721,7 +1737,7 @@ const WLK={
     self_deal_note:'⚠ Self-dealer — both scores heavily discounted',
     yes:'found ⚠', no:'none ✓', none:'none',
     u_sec:'s', u_min:'m', u_hr:'h', u_day:'d',
-    off:'Wallet eval needs the local backend running (127.0.0.1:8000).',
+    off:'Wallet eval needs the local backend running.',
     need_key:'The local backend has no GMGN API Key yet — opened the settings dialog for you. Save a key, then hit evaluate again.',
     no_trades_note:n=>`This address has no real buy/sell activity${n>0?` (it holds ${n} token(s) on-chain, none acquired by trading)`:''} — no PnL distribution to show.`,
     bt_no_trades:'This address has no real trading history, so it can\'t be scored/backtested.'}
